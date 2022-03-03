@@ -22,9 +22,8 @@ def is_file_nii(filename):
         is_file_nii: boolean stating if file is nii file
     """
     is_file_nii = os.path.isfile(filename)\
-                  and '.nii' in filename \
-                  and '.minf' not in filename \
-                  and 'normalized' in filename
+        and '.nii' in filename \
+        and '.minf' not in filename
     return is_file_nii
 
 
@@ -48,17 +47,18 @@ def fetch_data(cropped_dir, tgt_dir=None, side=None):
         if is_file_nii(file_nii):
             aimsvol = aims.read(file_nii)
             sample = np.asarray(aimsvol)
-            subject = re.search('([ae\d]{5,6})', file_nii).group(1)
+            subject = re.search('([ae\\d]{5,6})', file_nii).group(1)
             data_dict[subject] = [sample]
 
     dataframe = pd.DataFrame.from_dict(data_dict)
 
-    file_pickle_basename = side + 'skeleton.pkl'
+    file_pickle_basename = side + 'labels.pkl'
     file_pickle = os.path.join(tgt_dir, file_pickle_basename)
     dataframe.to_pickle(file_pickle)
 
 
 if __name__ == '__main__':
-    fetch_data(cropped_dir='/neurospin/dico/data/deep_folding/current/crops/CINGULATE/mask/sulcus_based/2mm/centered_combined/tissier_2018/Rcrops/',
-               tgt_dir='/neurospin/dico/data/deep_folding/current/crops/CINGULATE/mask/sulcus_based/2mm/centered_combined/tissier_2018/',
-               side='R')
+    fetch_data(
+        cropped_dir='/neurospin/dico/data/deep_folding/current/crops/SC/mask/sulcus_based/2mm/Rlabels/',
+        tgt_dir='/neurospin/dico/data/deep_folding/current/crops/SC/mask/sulcus_based/2mm/',
+        side='R')

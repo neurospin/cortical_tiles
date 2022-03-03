@@ -1,5 +1,5 @@
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# /usr/bin/env python2.7 + brainvisa compliant env
 #
 #  This software and supporting documentation are distributed by
 #      Institut Federatif de Recherche 49
@@ -33,45 +33,15 @@
 # The fact that you are presently reading this means that you have had
 # knowledge of the CeCILL license version 2 and that you accept its terms.
 
-""" Getting complete sulci names based on generic name and side
-
-The aim of this script is to output the complete name of sulci. For instance,
-giving "S.T.s.ter.asc.ant" and right side, script outputs
-"S.T.s.ter.asc.ant._right"
-
 """
+The aim of this script is to put together useful classes and functions
+for parallel computing
+"""
+from joblib import cpu_count
 
 
-def complete_sulci_name(sulci_list, side):
-    """Function gathering sulci and side to obtain full name of sulci
-
-    It reads suli prefixes from a list and adds a suffix depending on a given
-    side.
-
-    Args:
-        sulci_list: a list of sulci
-        side: a string corresponding to the hemisphere, whether 'L' or 'R'
-
-    Returns:
-        full_sulci_list: a list with full sulci names, ie with side included
+def define_njobs():
+    """Returns number of cpus used by main loop
     """
-    if any("right" in s for s in sulci_list) or any("left" in s for s in sulci_list):
-        return sulci_list
-    else:
-        side = 'right' if side=='R' else 'left'
-        suffix = '_' + side
-        if isinstance(sulci_list, list):
-            full_sulci_list = []
-            for sulcus in sulci_list:
-                sulcus += suffix
-                full_sulci_list.append(sulcus)
-            return full_sulci_list
-        else:
-            return sulci_list + suffix
-
-
-if __name__== '__main__':
-    fsl = complete_sulci_name(['S.T.s.ter.asc.ant.', 'F.I.P.'], 'L')
-    print(fsl)
-    fsl = complete_sulci_name('S.T.s.ter.asc.ant.', 'L')
-    print(fsl)
+    nb_cpus = cpu_count()
+    return max(nb_cpus - 2, 1)

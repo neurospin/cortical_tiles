@@ -5,44 +5,61 @@ import numpy as np
 import logging
 from soma import aims, aimsalgo
 from time import time
+from typing import Union
 
+logging.basicConfig(level=logging.WARNING)
 log = logging.getLogger(__name__)
 
-def resample(input_image, transformation, output_vs=None, background=11,
-             values=None, verbose=True):
+
+def resample(input_image: Union[str, aims.Volume],
+             transformation: Union[str, aims.AffineTransformation3d],
+             output_vs: tuple = None,
+             background: int = 0,
+             values: np.array = None,
+             verbose: bool = True) -> aims.Volume:
     """
-        Transform and resample a volume that as discret values
+        Transforms and resamples a volume that has discret values
 
         Parameters
         ----------
-        input_image: file
+        input_image: path to nifti file or aims volume
             Path to the input volume (.nii or .nii.gz file)
-        transformation: file
+        transformation: path to file
             Linear transformation file (.trm file)
         output_vs: tuple
             Output voxel size (default: None, no resampling)
         background: int
             Background value (default: 11)
         values: []
-            Array of unique values ordered by descendent priority. If not given,
+            Array of unique values ordered by ascendent priority without background. If not given,
             priority is set by ascendent values
 
         Return
         ------
-        resampled_vol:
+        resampled:
             Transformed and resampled volume
     """
-    
+
+    # Handling of verbosity
     if verbose:
-        logging.basicConfig(level=logging.INFO)
+        log.setLevel(level=logging.INFO)
+    else:
+        log.setLevel(level=logging.WARNING)
     tic = time()
 
-    # Read inputs
-    vol = aims.read(input_image)
+    # Reads input image (either path to file or aims volume)
+    if isinstance(input_image, str):
+        vol = aims.read(input_image)
+    else:
+        vol = input_image
     vol_dt = vol.__array__()
 
+    # Reads transformation if present (either path to file or aims Volume)
     if transformation:
-        trm = aims.read(transformation)
+        if isinstance(transformation, str):
+            trm = aims.read(transformation)
+        else:
+            trm = transformation
     else:
         trm = aims.AffineTransformation3d(np.eye(4))
     inv_trm = trm.inverse()
@@ -62,7 +79,7 @@ def resample(input_image, transformation, output_vs=None, background=11,
         output_vs = vol.header()['voxel_size'][:3]
         new_dim = vol.header()['volume_dimension'][:3]
 
-    log.info("Time before resampling: {}s".format(time()-tic))
+    log.info("Time before resampling: {}s".format(time() - tic))
     tic = time()
 
     # Transform the background
@@ -78,18 +95,18 @@ def resample(input_image, transformation, output_vs=None, background=11,
     resampler.resample_inv(vol, inv_trm, 0, resampled)
     resampled_dt = np.asarray(resampled)
 
-    log.info("Background resampling: {}s".format(time()-tic))
+    log.info("Background resampling: {}s".format(time() - tic))
     tic = time()
 
     if values is None:
         values = sorted(np.unique(vol_dt[vol_dt != background]))
-    else:
-        # Reverse order as value are passed by descendent priority
-        values = values[::-1]
+
+    # if values is not None, values are given in ascending order
+    # Note also that background shall not be given in values
 
     # Create one bucket by value (except background)
     # FIXME: Create several buckets because I didn't understood how to add
-    #  several bucket to a BucketMap
+    # several bucket to a BucketMap
     for i, v in enumerate(values):
         toc = time()
         bck = aims.BucketMap_VOID()
@@ -116,7 +133,7 @@ def resample(input_image, transformation, output_vs=None, background=11,
         log.info("Time for value {} ({} voxels): {}s".format(
             v, np.sum(np.where(vol_dt == v)), time() - tic))
         log.info("\t{}s to create the bucket\n\t{}s to resample bucket\n"
-              "\t{}s to assign values".format(t_bck, t_rs, time()-toc))
+                 "\t{}s to assign values".format(t_bck, t_rs, time() - toc))
         tic = time()
 
     return resampled
