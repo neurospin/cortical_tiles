@@ -40,14 +40,15 @@ a specified hemisphere.
 
 """
 
-from os.path import join
-import numpy as np
 import json
+from os.path import join
 
+import numpy as np
 
 _BOX_DIR_DEFAULT = "/neurospin/dico/deep_folding_data/data/bbox/"
 
-def compute_max(list_bbmin, list_bbmax):
+
+def compute_max(list_bbmin: list, list_bbmax: list) -> tuple:
     """Returns the coordinates of the box encompassing all input boxes
 
     Parameters:
@@ -55,10 +56,11 @@ def compute_max(list_bbmin, list_bbmax):
     list_bbmax: list containing the lower left vertex of the box
 
     Returns:
-    bbmin: numpy array with the x,y,z coordinates
-                of the upper right corner of the box
-    bblax: numpy array with the x,y,z coordinates
-                of the lower left corner of the box
+    tuple (bbmin, bbmax) with
+        bbmin: numpy array with the x,y,z coordinates
+                    of the upper right corner of the box; 
+        bbMax: numpy array with the x,y,z coordinates
+                    of the lower left corner of the box
     """
 
     bbmin = np.array(
@@ -73,8 +75,13 @@ def compute_max(list_bbmin, list_bbmax):
 
     return bbmin, bbmax
 
-def compute_max_box(sulci_list, side, talairach_box=False, src_dir=_BOX_DIR_DEFAULT):
-    """Function returning maximal bounding box of a given list of sulci
+
+def compute_max_box(
+        sulci_list,
+        side,
+        talairach_box=False,
+        src_dir=_BOX_DIR_DEFAULT):
+    """Returns maximal bounding box of a given list of sulci
 
     It reads json files contained in the source directory.
     They are listed in subdirectory 'L' or 'R' according t hemisphere
@@ -87,8 +94,9 @@ def compute_max_box(sulci_list, side, talairach_box=False, src_dir=_BOX_DIR_DEFA
         src_dir: path to source directory containing bbox dimensions
 
     Returns:
-        bbmin: an array of minimum coordinates of bounding box of given sulci
-        bbmax: an array of maximum coordinates of bounding box of given sulci
+        tuple (bbminx, bbmax) with
+            bbmin: an array of minimum coordinates of bounding box of given sulci;
+            bbmax: an array of maximum coordinates of bounding box of given sulci
     """
 
     list_bbmin, list_bbmax = [], []
@@ -101,8 +109,8 @@ def compute_max_box(sulci_list, side, talairach_box=False, src_dir=_BOX_DIR_DEFA
         with open(join(src_dir, side, sulcus + '.json')) as json_file:
             sulcus = json.load(json_file)
 
-            list_bbmin.append(sulcus['bbmin_'+rad])
-            list_bbmax.append(sulcus['bbmax_'+rad])
+            list_bbmin.append(sulcus['bbmin_' + rad])
+            list_bbmax.append(sulcus['bbmax_' + rad])
 
     bbmin_npy, bbmax_npy = compute_max(list_bbmin=list_bbmin,
                                        list_bbmax=list_bbmax)
@@ -113,6 +121,6 @@ def compute_max_box(sulci_list, side, talairach_box=False, src_dir=_BOX_DIR_DEFA
 if __name__ == '__main__':
     bbmin, bbmax = compute_max_box(['S.T.s.ter.asc.ant._left',
                                     'S.T.s.ter.asc.test._left'],
-                        'L')
+                                   'L')
     print("bbmin = ", bbmin)
     print("bbmax = ", bbmax)

@@ -2,11 +2,12 @@
 Model outputs are stored as numpy arrays.
 """
 
-import anatomist.api as anatomist
-from soma import aims
-import numpy as np
 import argparse
+
+import anatomist.api as anatomist
 import dico_toolbox as dtx
+import numpy as np
+from soma import aims
 
 
 def array_to_ana(ana_a, img, sub_id, phase, status):
@@ -36,7 +37,10 @@ def main():
     buckets = True
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root_dir", type=str, help='directory where model outputs are stored')
+    parser.add_argument(
+        "--root_dir",
+        type=str,
+        help='directory where model outputs are stored')
     args = parser.parse_args()
     root_dir = args.root_dir
 
@@ -59,11 +63,23 @@ def main():
         for img, entry in [(input, 'input'), (output, 'output')]:
             globals()['block%s%s%s' % (sub_id, phase, entry)] = a.createWindow('3D', block=block)
 
-            globals()['img%s%s%s' % (sub_id, phase, entry)], globals()['a_img%s%s%s' % (sub_id,
-                            phase, entry)] = array_to_ana(a, img, sub_id, phase, status=entry)
+            globals()[
+                'img%s%s%s' %
+                (sub_id, phase, entry)], globals()[
+                'a_img%s%s%s' %
+                (sub_id, phase, entry)] = array_to_ana(
+                a, img, sub_id, phase, status=entry)
 
-            globals()['block%s%s%s' % (sub_id, phase, entry)].addObjects(globals()['a_img%s%s%s' % (sub_id, phase, entry)])
-
+            globals()[
+                'block%s%s%s' %
+                (sub_id,
+                 phase,
+                 entry)].addObjects(
+                globals()[
+                    'a_img%s%s%s' %
+                    (sub_id,
+                     phase,
+                     entry)])
 
 
 if __name__ == '__main__':

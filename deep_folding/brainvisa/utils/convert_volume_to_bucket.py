@@ -1,4 +1,4 @@
-#!python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #
 #  This software and supporting documentation are distributed by
@@ -23,45 +23,34 @@
 # with loading,  using,  modifying and/or developing or reproducing the
 # software by the user in light of its specific status of free software,
 # that may mean  that it is complicated to manipulate,  and  that  also
-# therefore means  that it is reserved for developers  and  experienced
-# professionals having in-depth computer knowledge. Users are therefore
-# encouraged to load and test the software's suitability as regards their
 # requirements in conditions enabling the security of their systems and/or
 # data to be ensured and,  more generally, to use and operate it in the
-# same conditions as regards security.
-#
-# The fact that you are presently reading this means that you have had
-# knowledge of the CeCILL license version 2 and that you accept its terms.
-
-"""Write distance maps from skeleton files
-
-  Typical usage
-  -------------
-  You can use this program by first entering in the brainvisa environment
-  (here brainvisa 5.0.0 installed with singurity) and launching the script
-  from the terminal:
-  >>> bv bash
-  >>> python write_distance_map.py
-
 
 """
-
-import sys
+This program converts volumes contained in a folder into buckets.
+It writes bucket files in the output folder
+"""
+import argparse
 import glob
 import os
-import re
-import argparse
-from pqdm.processes import pqdm
+import sys
+
+import six
+from deep_folding.brainvisa.utils.remove_hull import convert_volume_to_bucket
+from soma import aims
 from tqdm import tqdm
-from joblib import cpu_count
-import numpy as np
 
 
-def define_njobs():
-    """Returns number of cpus used by main loop
+def read_convert_write(vol_filename, bucket_filename):
+    """Reads volume, converts and writes back bucket.
+
+    Args:
+        vol_filename [str]: path to input volume file
+        bucket_filename [str]: path to output bucket file
     """
-    nb_cpus = cpu_count()
-    return max(nb_cpus-2, 1)
+    vol = aims.read(vol_filename)
+    bucket_map, _ = convert_volume_to_bucket(vol)
+    aims.write(bucket_map, bucket_filename)
 
 
 def parse_args(argv):
@@ -76,8 +65,8 @@ def parse_args(argv):
 
     # Parse command line arguments
     parser = argparse.ArgumentParser(
-        prog='write_distance_map.py',
-        description='Generates distance maps from skeleton files')
+        prog='convert_volume_to_bucket.py',
+        description='Generates bucket files converted from volume files')
     parser.add_argument(
         "-s", "--src_dir", type=str, required=True,
         help='Source directory where the MRI data lies.')
@@ -90,37 +79,16 @@ def parse_args(argv):
     return args
 
 
-def skel_2_distMap(subject):
-    """Reads volume, converts and writes back bucket.
-
-    Args:
-        vol_filename [str]: path to input volume file
-        bucket_filename [str]: path to output bucket file
-    """
-    src_dir = "/neurospin/dico/data/deep_folding/datasets/hcp/skeleton/R"
-    tgt_dir = "/neurospin/dico/data/deep_folding/datasets/hcp/distance_map/R"
-
-    print(subject)
-    skeleton_filename = f"{src_dir}/Rskeleton_generated_{subject}.nii.gz"
-    distMap_filename = build_distMap_filename(subject, tgt_dir)
-
-    cmd_distMap = 'VipDistanceMap' + \
-                    ' -i ' + skeleton_filename + \
-                    ' -o ' + distMap_filename + \
-                    ' -g f -d 0'
-    #print(cmd_distMap)
-    os.system(cmd_distMap)
-
-
-def get_subject_name(filename):
+def get_basename_without_extension(filename):
     "Returns file basename without extension"
-    subject = re.search('(\d{6})', filename).group(1)
-    return subject
+    basename = os.path.basename(filename)
+    without_extension = basename.split('.')[0]
+    return without_extension
 
 
-def build_distMap_filename(subject, tgt_dir):
+def build_bucket_filename(subject, tgt_dir):
     """Returns bucket filename"""
-    return f"{tgt_dir}/distance_map_{subject}.nii.gz"
+    return f"{tgt_dir}/{subject}.bck"
 
 
 def loop_over_directory(src_dir, tgt_dir):
@@ -128,14 +96,21 @@ def loop_over_directory(src_dir, tgt_dir):
     """
     # Gets and creates all filenames
     filenames = glob.glob(f"{src_dir}/*.nii.gz")
-    subjects = [get_subject_name(filename) for filename in filenames]
-    print(subjects)
-    #distMap_filenames = [build_distMap_filename(subject, tgt_dir) for subject in subjects]
+    subjects = [get_basename_without_extension(
+        filename) for filename in filenames]
+    bucket_filenames = [
+        build_bucket_filename(
+            subject,
+            tgt_dir) for subject in subjects]
 
-    #for sub in tqdm(subjects):
-    #    skel_2_distMap(sub)
-
-    pqdm(subjects, skel_2_distMap, n_jobs=define_njobs())
+    # Creates target d    # python3 convert_volume_to_bucket.py \
+    # -s /neurospin/dico/data/deep_folding/current/crops/CINGULATE/mask/sulcus_based/2mm/simple_combined/Rcrops \
+    # -t /neurospin/di
+    # Makes the actual conversion
+    for vol_filename, bucket_filename in tqdm(
+            zip(filenames, bucket_filenames), total=len(filenames)):
+        read_convert_write(vol_filename=vol_filename,
+                           bucket_filename=bucket_filename)
 
 
 def main(argv):

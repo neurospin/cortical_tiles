@@ -1,5 +1,5 @@
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# /usr/bin/env python3.6 + brainvisa compliant env
 #
 #  This software and supporting documentation are distributed by
 #      Institut Federatif de Recherche 49
@@ -31,39 +31,17 @@
 # same conditions as regards security.
 #
 # The fact that you are presently reading this means that you have had
-# knowledge of the CeCILL license version 2 and that you accept its terms.""" Dilating a given mask"""from soma import aims
+# knowledge of the CeCILL license version 2 and that you accept its terms.
+
+"""
+The aim of this script is to put together useful classes and functions
+for parallel computing
+"""
+from joblib import cpu_count
 
 
-import numpy as np
-from soma.aimsalgo import MorphoGreyLevel_S16
-#import anatomist.api as anatomist
-#from soma.qt_gui.qt_backend import Qt
-
-_AIMS_BINARY_ONE = 32767
-
-def dilate(mask, radius=10.):
+def define_njobs():
+    """Returns number of cpus used by main loop
     """
-    """
-    # Creates volume
-    #hdr = aims.StandardReferentials.icbm2009cTemplateHeader()
-    #vol = aims.Volume(hdr['volume_dimension'], dtype='S16')
-    #vol.copyHeaderFrom(hdr)
-    arr = np.asarray(mask)
-    # Thresholding and binarization of mask
-    arr[arr<10] = 0
-    arr[arr>=10] = _AIMS_BINARY_ONE
-    # Dilates initial volume of 10 mm
-    morpho = MorphoGreyLevel_S16()
-    dilate = morpho.doDilation(mask, radius)
-    arr_dilate = np.asarray(dilate)
-    arr_dilate[arr_dilate>=1] = 1
-    return dilate
-
-
-def main():
-    mask = aims.read('/neurospin/dico/data/deep_folding/current/mask/2mm/R/paracingular._right.nii.gz')
-    mask_dilated = dilate(mask)
-    aims.write(mask_dilated, '/tmp/mask_dil.nii.gz')
-
-if __name__ == '__main__':
-    main()
+    nb_cpus = cpu_count()
+    return max(nb_cpus - 2, 1)

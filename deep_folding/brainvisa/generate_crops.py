@@ -37,7 +37,8 @@
 
 The aim of this script is to create dataset of cropped skeletons from MRIs
 saved in a .pickle file.
-Several steps are required: normalization, crop and .pickle generation
+We read resampled skeleton files
+Several steps are required: crop and .pickle generation
 
   Typical usage
   -------------
@@ -45,54 +46,48 @@ Several steps are required: normalization, crop and .pickle generation
   (here brainvisa 5.0.0 installed with singurity) and launching the script
   from the terminal:
   >>> bv bash
-  >>> python dataset_gen_pipe.py
+  >>> python3 generate_crops.py
 
   Alternatively, you can launch the script in the interactive terminal ipython:
-  >>> %run dataset_gen_pipe.py
+  >>> %run generate_crops.py
 
 """
 
 import argparse
-import sys
+import glob
 import os
+import re
+import sys
+import tempfile
 from os import listdir
 from os.path import join
-import tempfile
-import re
 
 import numpy as np
 import scipy.ndimage
-
 import six
-
-from soma import aims
-
-from pqdm.processes import pqdm
+from deep_folding.brainvisa.load_data import fetch_data
+from deep_folding.brainvisa.utils import remove_hull
+from deep_folding.brainvisa.utils.bbox import compute_max_box
+from deep_folding.brainvisa.utils.logs import LogJson
+from deep_folding.brainvisa.utils.logs import log_command_line
+from deep_folding.brainvisa.utils.mask import compute_centered_mask
+from deep_folding.brainvisa.utils.mask import compute_simple_mask
+from deep_folding.brainvisa.utils.resample import resample
+from deep_folding.brainvisa.utils.sulcus_side import complete_sulci_name
 from joblib import cpu_count
-
-from deep_folding.anatomist_tools.utils.logs import LogJson
-from deep_folding.anatomist_tools.utils.bbox import compute_max_box
-from deep_folding.anatomist_tools.utils.mask import compute_simple_mask, compute_centered_mask
-from deep_folding.anatomist_tools.utils.resample import resample
-from deep_folding.anatomist_tools.utils import remove_hull
-from deep_folding.anatomist_tools.utils.sulcus_side import complete_sulci_name
-from deep_folding.anatomist_tools.load_data import fetch_data
-
+from pqdm.processes import pqdm
+from soma import aims
 from tqdm import tqdm
 
 _ALL_SUBJECTS = -1
 
 _SIDE_DEFAULT = 'L'  # hemisphere 'L' or 'R'
 
-_INTERP_DEFAULT = 'nearest'  # default interpolation for ApplyAimsTransform
+_CROPPING_DEFAULT = 'mask'  # crops according to a mask by default
 
-_RESAMPLING_DEFAULT = None # if None, resampling method is AimsApplyTransform
+_OUT_VOXEL_SIZE = (1, 1, 1)  # default output voxel size
 
-_CROPPING_DEFAULT = 'bbox' # crops over a bounding box by default
-
-_OUT_VOXEL_SIZE = (1, 1, 1) # default output voxel size
-
-_EXTERNAL = 11 # topological value meaning "outside the brain"
+_EXTERNAL = 11  # topological value meaning "outside the brain"
 
 # sulcus to encompass:
 # its name depends on the hemisphere side
@@ -100,13 +95,14 @@ _SULCUS_DEFAULT = 'S.T.s.ter.asc.ant.'
 
 _COMBINE_TYPE = False
 
-_DIST_MAP_DEFAULT = False
-
 # Input directories
 # -----------------
 
+# Input directory contaning the skeletons and labels
+_SRC_DIR_DEFAULT = '/neurospin/dico/data/deep_folding/datasets/hcp'
+
 # Input directory contaning the morphologist analysis of the HCP database
-_SRC_DIR_DEFAULT = '/neurospin/hcp'
+_GRAPH_DIR_DEFAULT = '/neurospin/hcp'
 
 # Directory where subjects to be processed are stored.
 # Default is for HCP dataset
@@ -124,37 +120,42 @@ _MASK_DIR_DEFAULT = '/neurospin/dico/data/deep_folding/current/mask'
 # -------------------------
 _TGT_DIR_DEFAULT = '/neurospin/dico/data/deep_folding/test'
 
+_VERBOSE_DEFAULT = False
+
 # temporary directory
 temp_dir = tempfile.mkdtemp()
+
 
 def define_njobs():
     """Returns number of cpus used by main loop
     """
     nb_cpus = cpu_count()
-    return max(nb_cpus-2, 1)
+    return max(nb_cpus - 2, 1)
+
 
 class DatasetCroppedSkeleton:
     """Generates cropped skeleton files and corresponding pickle file
     """
 
-    def __init__(self, src_dir=_SRC_DIR_DEFAULT,
+    def __init__(self,
+                 graph_dir=_GRAPH_DIR_DEFAULT,
+                 src_dir=_SRC_DIR_DEFAULT,
                  tgt_dir=_TGT_DIR_DEFAULT,
                  bbox_dir=_BBOX_DIR_DEFAULT,
                  mask_dir=_MASK_DIR_DEFAULT,
                  morphologist_dir=_MORPHOLOGIST_DIR_DEFAULT,
                  list_sulci=_SULCUS_DEFAULT,
                  side=_SIDE_DEFAULT,
-                 interp=_INTERP_DEFAULT,
-                 resampling=_RESAMPLING_DEFAULT,
                  cropping=_CROPPING_DEFAULT,
                  out_voxel_size=_OUT_VOXEL_SIZE,
                  combine_type=_COMBINE_TYPE,
-                 dist_map=_DIST_MAP_DEFAULT):
+                 verbose=_VERBOSE_DEFAULT):
         """Inits with list of directories and list of sulci
 
         Args:
-            src_dir: list of strings naming full path source directories,
-                    containing MRI images
+            graph_dir: list of strings naming full path source directories,
+                    containing MRI and graph images
+            src_dir: folder containing generated skeletons and labels
             tgt_dir: name of target (output) directory with full path
             transform_dir: directory containing transformation files
                     (generated using transform.py)
@@ -162,9 +163,9 @@ class DatasetCroppedSkeleton:
                     (generated using bounding_box.py)
             list_sulci: list of sulcus names
             side: hemisphere side (either L for left, or R for right hemisphere)
-            interp: string giving interpolation for AimsApplyTransform
         """
 
+        self.graph_dir = graph_dir
         self.src_dir = src_dir
         self.side = side
         # Transforms sulcus in a list of sulci
@@ -173,45 +174,42 @@ class DatasetCroppedSkeleton:
         self.list_sulci = complete_sulci_name(self.list_sulci, self.side)
         self.tgt_dir = tgt_dir
         self.bbox_dir = bbox_dir
-        self.mask_dir=mask_dir
+        self.mask_dir = mask_dir
         self.morphologist_dir = morphologist_dir
-        self.interp = interp
-        self.resampling = resampling
         self.cropping = cropping
         self.out_voxel_size = out_voxel_size
         self.combine_type = combine_type
-        self.dist_map = dist_map
+        self.verbose = verbose
 
         # Morphologist directory
-        self.morphologist_dir = join(self.src_dir, self.morphologist_dir)
-        ## for Tissier
-        # self.morphologist_dir = join(self.src_dir)
+        self.morphologist_dir = join(self.graph_dir, self.morphologist_dir)
+
         # default acquisition subdirectory
         self.acquisition_dir = "%(subject)s/t1mri/default_acquisition"
 
-        # Directory where to store cropped files
-        self.cropped_dir = join(self.tgt_dir, self.side + 'crops')
+        # Directory where to store cropped skeleton files
+        self.cropped_skeleton_dir = join(self.tgt_dir, self.side + 'crops')
+
+        # Directory where to store cropped label files
+        self.cropped_label_dir = join(self.tgt_dir, self.side + 'labels')
 
         # Names of files in function of dictionary: keys -> 'subject' and 'side'
-        # Files from morphologist pipeline
-        #self.skeleton_file = 'default_analysis/segmentation/' \
-        #                    '%(side)sskeleton_%(subject)s.nii.gz'
-        ## FOR HCP dataset
-        # self.skeleton_file = '/neurospin/dico/data/deep_folding/datasets/hcp/' \
-        #                            '%(side)sskeleton_%(subject)s_generated.nii.gz'
-        self.distMap_file = '/neurospin/dico/data/deep_folding/datasets/hcp/distance_map/R/' \
-                                   'distance_map_%(subject)s.nii.gz'
-        ## FOR TISSIER dataset
-        # self.skeleton_file = '/neurospin/dico/data/deep_folding/datasets/ACC_patterns/tissier/' \
-        #                             '%(side)sskeleton_%(subject)s_generated.nii.gz'
+        # Generated skeleton from folding graphs
+        self.skeleton_dir = join(self.src_dir, 'skeleton', self.side)
+        self.skeleton_file = join(
+            self.skeleton_dir,
+            '%(side)sskeleton_generated_%(subject)s.nii.gz')
+        self.foldlabel_dir = join(self.src_dir, 'foldlabel', self.side)
+        self.foldlabel_file = join(self.foldlabel_dir,
+                                   '%(side)sfoldlabel_%(subject)s.nii.gz')
+
         self.graph_file = 'default_analysis/folds/3.1/default_session_auto/' \
-                            '%(side)s%(subject)s_default_session_auto.arg'
-        ## FOR TISSIER dataset
-        # self.graph_file = 'default_analysis/folds/3.1/default_session_manual/' \
-        #                      '%(side)s%(subject)s_default_session_manual.arg'
+            '%(side)s%(subject)s_default_session_auto.arg'
 
-        # Names of files in function of dictionary: keys -> 'subject' and 'side'
-        self.cropped_file = '%(subject)s_normalized.nii.gz'
+        # Names of files in function of dictionary: keys -> 'subject' and
+        # 'side'
+        self.cropped_skeleton_file = '%(subject)s_cropped_skeleton.nii.gz'
+        self.cropped_label_file = '%(subject)s_cropped_label.nii.gz'
 
         # Initialization of bounding box coordinates
         self.bbmin = np.zeros(3)
@@ -223,7 +221,8 @@ class DatasetCroppedSkeleton:
 
         # reference file in MNI template with corrct voxel size
         self.ref_file = f"{temp_dir}/file_ref.nii.gz"
-        self.g_to_icbm_template_file = join(temp_dir, 'file_g_to_icbm_%(subject)s.trm')
+        self.g_to_icbm_template_file = join(
+            temp_dir, 'file_g_to_icbm_%(subject)s.trm')
 
     def define_referentials(self):
         """Writes MNI 2009 reference file with output voxel size
@@ -252,10 +251,10 @@ class DatasetCroppedSkeleton:
 
         # Crop of the images based on bounding box
         cmd_bounding_box = ' -x ' + xmin + ' -y ' + ymin + ' -z ' + zmin + \
-                        ' -X ' + xmax + ' -Y ' + ymax + ' -Z ' + zmax
+            ' -X ' + xmax + ' -Y ' + ymax + ' -Z ' + zmax
         cmd_crop = 'AimsSubVolume' + \
-                ' -i ' + file_cropped + \
-                ' -o ' + file_cropped + cmd_bounding_box
+            ' -i ' + file_cropped + \
+            ' -o ' + file_cropped + cmd_bounding_box
 
         # Sts output from AimsSubVolume is recorded in var_output
         # Put following command to get the output
@@ -269,16 +268,21 @@ class DatasetCroppedSkeleton:
         """Smooths the mask with Gaussian Filter
         """
         arr = np.asarray(self.mask)
-        arr_filter = scipy.ndimage.gaussian_filter(arr.astype(float), sigma=0.5,
-                             order=0, output=None, mode='reflect', truncate=4.0)
-        arr[:] = (arr_filter> 0.001).astype(int)
+        arr_filter = scipy.ndimage.gaussian_filter(
+            arr.astype(float),
+            sigma=0.5,
+            order=0,
+            output=None,
+            mode='reflect',
+            truncate=4.0)
+        arr[:] = (arr_filter > 0.001).astype(int)
 
     def crop_mask(self, file_cropped, verbose):
         """Crops according to mask"""
         vol = aims.read(file_cropped)
 
         arr = np.asarray(vol)
-        #remove_hull.remove_hull(arr)
+        # remove_hull.remove_hull(arr)
 
         arr_mask = np.asarray(self.mask)
         arr[arr_mask == 0] = 0
@@ -294,10 +298,10 @@ class DatasetCroppedSkeleton:
 
         # Defines rop of the images based on bounding box
         cmd_bounding_box = ' -x ' + xmin + ' -y ' + ymin + ' -z ' + zmin + \
-                        ' -X ' + xmax + ' -Y ' + ymax + ' -Z ' + zmax
+            ' -X ' + xmax + ' -Y ' + ymax + ' -Z ' + zmax
         cmd_crop = 'AimsSubVolume' + \
-                ' -i ' + file_cropped + \
-                ' -o ' + file_cropped + cmd_bounding_box
+            ' -i ' + file_cropped + \
+            ' -o ' + file_cropped + cmd_bounding_box
 
         if verbose:
             os.popen(cmd_crop).read()
@@ -313,55 +317,81 @@ class DatasetCroppedSkeleton:
 
         # Identifies 'subject' in a mapping (for file and directory namings)
         subject = {'subject': subject_id, 'side': self.side}
-        ## FOR TISSIER
+        # FOR TISSIER
         # subject_id = re.search('([ae\d]{5,6})', subject_id).group(0)
 
         # Names directory where subject analysis files are stored
         subject_dir = \
             join(self.morphologist_dir, self.acquisition_dir % subject)
 
-        if self.dist_map:
-            target_file = join(subject_dir, self.distMap_file % {'subject': subject_id})
-            print(target_file)
-        else:
-            # Skeleton file name
-            target_file = join(subject_dir, self.skeleton_file % {'subject': subject_id, 'side': self.side})
+        # Skeleton file name
+        file_skeleton = self.skeleton_file % {
+            'subject': subject_id, 'side': self.side}
+        # Foldlabel file name
+        file_foldlabel = self.foldlabel_file % {
+            'subject': subject_id, 'side': self.side}
 
         # Creates transformation MNI template
         file_graph = join(subject_dir, self.graph_file % subject)
         graph = aims.read(file_graph)
-        g_to_icbm_template = aims.GraphManip.getICBM2009cTemplateTransform(graph)
+        g_to_icbm_template = aims.GraphManip.getICBM2009cTemplateTransform(
+            graph)
         g_to_icbm_template_file = self.g_to_icbm_template_file % subject
         aims.write(g_to_icbm_template, g_to_icbm_template_file)
 
-        if os.path.exists(target_file):
+        if os.path.exists(file_skeleton):
             # Creates output (cropped) file name
-            file_cropped = join(self.cropped_dir, self.cropped_file % {'subject': subject_id, 'side': self.side})
+            file_cropped_skeleton = join(
+                self.cropped_skeleton_dir,
+                self.cropped_skeleton_file % {
+                    'subject': subject_id,
+                    'side': self.side})
+
+            # We give values with ascendent priority
+            # The more important is the inversion in the priority
+            # for the bottom value (30) and the simple surface value (60)
+            # with respect to the natural order
+            # We don't give background
+            values = np.array([90, 80, 70, 50, 40, 20, 10, 30, 60, 11])
 
             # Normalization and resampling of skeleton images
-            if self.resampling:
-                resampled = resample(input_image=target_file,
-                                     output_vs=self.out_voxel_size,
-                                     transformation=g_to_icbm_template_file,
-                                     verbose=False)
-                aims.write(resampled, file_cropped)
-            else :
-                cmd_normalize = 'AimsApplyTransform' + \
-                                ' -i ' + target_file + \
-                                ' -o ' + file_cropped + \
-                                ' -m ' + g_to_icbm_template_file + \
-                                ' -r ' + self.ref_file + \
-                                ' -t ' + self.interp
-                os.system(cmd_normalize)
-                print(cmd_normalize)
+            resampled = resample(input_image=file_skeleton,
+                                 output_vs=self.out_voxel_size,
+                                 transformation=g_to_icbm_template_file,
+                                 values=values,
+                                 verbose=False)
+            aims.write(resampled, file_cropped_skeleton)
 
             # Cropping of skeleton image
             if self.cropping == 'bbox':
-                self.crop_bbox(file_cropped, verbose)
+                self.crop_bbox(file_cropped_skeleton, verbose)
             else:
-                self.crop_mask(file_cropped, verbose)
+                self.crop_mask(file_cropped_skeleton, verbose)
+        else:
+            raise FileNotFoundError(f"{file_skeleton} not found")
 
+        if os.path.exists(file_foldlabel):
+            # Creates output (cropped) file name
+            file_cropped_label = join(
+                self.cropped_label_dir,
+                self.cropped_label_file % {
+                    'subject': subject_id,
+                    'side': self.side})
 
+            # Normalization and resampling of skeleton images
+            resampled = resample(input_image=file_foldlabel,
+                                 output_vs=self.out_voxel_size,
+                                 transformation=g_to_icbm_template_file,
+                                 verbose=False)
+            aims.write(resampled, file_cropped_label)
+
+            # Cropping of skeleton image
+            if self.cropping == 'bbox':
+                self.crop_bbox(file_cropped_label, verbose)
+            else:
+                self.crop_mask(file_cropped_label, verbose)
+        else:
+            raise FileNotFoundError(f"{file_foldlabel} not found")
 
     def crop_files(self, number_subjects=_ALL_SUBJECTS):
         """Crop nii files
@@ -375,9 +405,14 @@ class DatasetCroppedSkeleton:
 
         if number_subjects:
 
-            # subjects are detected as the directory names under src_dir
-            list_all_subjects = [dI for dI in os.listdir(self.morphologist_dir)\
-             if os.path.isdir(os.path.join(self.morphologist_dir,dI))]
+            # subjects are detected as the nifti file names under src_dir
+            expr = '^.skeleton_generated_([0-9a-zA-Z]*).nii.gz$'
+            if os.path.isdir(self.skeleton_dir):
+                list_all_subjects = [re.search(expr, os.path.basename(dI))[1]
+                                     for dI in glob.glob(f"{self.skeleton_dir}/*.nii.gz")]
+            else:
+                raise NotADirectoryError(
+                    f"{self.sksleton_dir} doesn't exist or is not a directory")
 
             # Gives the possibility to list only the first number_subjects
             list_subjects = (
@@ -388,25 +423,27 @@ class DatasetCroppedSkeleton:
             # Creates target and cropped directory
             if not os.path.exists(self.tgt_dir):
                 os.makedirs(self.tgt_dir)
-            if not os.path.exists(self.cropped_dir):
-                os.makedirs(self.cropped_dir)
+            if not os.path.exists(self.cropped_skeleton_dir):
+                os.makedirs(self.cropped_skeleton_dir)
+            if not os.path.exists(self.cropped_label_dir):
+                os.makedirs(self.cropped_label_dir)
 
             # Writes number of subjects and directory names to json file
             dict_to_add = {'nb_subjects': len(list_subjects),
+                           'graph_dir': self.graph_dir,
                            'src_dir': self.src_dir,
                            'bbox_dir': self.bbox_dir,
                            'mask_dir': self.mask_dir,
                            'side': self.side,
-                           'interp': self.interp,
                            'list_sulci': self.list_sulci,
                            'bbmin': self.bbmin.tolist(),
                            'bbmax': self.bbmax.tolist(),
                            'tgt_dir': self.tgt_dir,
-                           'cropped_dir': self.cropped_dir,
-                           'resampling_type': 'sulcus-based' if self.resampling else 'AimsApplyTransform',
+                           'cropped_skeleton_dir': self.cropped_skeleton_dir,
+                           'cropped_label_dir': self.cropped_label_dir,
+                           'resampling_type': 'sulcus-based',
                            'out_voxel_size': self.out_voxel_size,
-                           'combine_type': self.combine_type,
-                           'dist_map': self.dist_map
+                           'combine_type': self.combine_type
                            }
             self.json.update(dict_to_add=dict_to_add)
 
@@ -416,10 +453,12 @@ class DatasetCroppedSkeleton:
             # Performs cropping for each file in a parallelized way
             print("list_subjects = ", list_subjects)
 
-            for sub in list_subjects:
-                 self.crop_one_file(sub)
-            #pqdm(list_subjects, self.crop_one_file, n_jobs=define_njobs())
-
+            if self.verbose:
+                for sub in list_subjects:
+                    self.crop_one_file(sub)
+                print("VERBOSE MODE: subjects are scanned serially, without parallelism")
+            else:
+                pqdm(list_subjects, self.crop_one_file, n_jobs=define_njobs())
 
     def dataset_gen_pipe(self, number_subjects=_ALL_SUBJECTS):
         """Main API to create pickle files
@@ -438,29 +477,30 @@ class DatasetCroppedSkeleton:
         if number_subjects:
             if self.cropping == 'bbox':
                 self.bbmin, self.bbmax = compute_max_box(sulci_list=self.list_sulci,
-                                                        side=self.side,
-                                                        talairach_box=False,
-                                                        src_dir=self.bbox_dir)
+                                                         side=self.side,
+                                                         talairach_box=False,
+                                                         src_dir=self.bbox_dir)
             elif self.cropping == 'mask':
                 if self.combine_type:
                     self.mask, self.bbmin, self.bbmax = \
                         compute_centered_mask(sulci_list=self.list_sulci,
-                                    side=self.side,
-                                    mask_dir=self.mask_dir)
+                                              side=self.side,
+                                              mask_dir=self.mask_dir)
                 else:
                     self.mask, self.bbmin, self.bbmax = \
                         compute_simple_mask(sulci_list=self.list_sulci,
-                                    side=self.side,
-                                    mask_dir=self.mask_dir)
+                                            side=self.side,
+                                            mask_dir=self.mask_dir)
             else:
-                raise ValueError('Cropping must be either \'bbox\' or \'mask\'')
+                raise ValueError(
+                    'Cropping must be either \'bbox\' or \'mask\'')
 
         # Generate cropped files
         self.crop_files(number_subjects=number_subjects)
 
         # Creation of .pickle file for all subjects
         if number_subjects:
-            fetch_data(cropped_dir=self.cropped_dir,
+            fetch_data(cropped_dir=self.cropped_skeleton_dir,
                        tgt_dir=self.tgt_dir,
                        side=self.side)
 
@@ -480,8 +520,12 @@ def parse_args(argv):
         prog='dataset_gen_pipe.py',
         description='Generates cropped and pickle files')
     parser.add_argument(
+        "-g", "--graph_dir", type=str, default=_GRAPH_DIR_DEFAULT,
+        help='Source directory where the graph lies. '
+             'Default is : ' + _GRAPH_DIR_DEFAULT)
+    parser.add_argument(
         "-s", "--src_dir", type=str, default=_SRC_DIR_DEFAULT,
-        help='Source directory where the MRI data lies. '
+        help='Source directory where skeletons and labels lie. '
              'Default is : ' + _SRC_DIR_DEFAULT)
     parser.add_argument(
         "-t", "--tgt_dir", type=str, default=_TGT_DIR_DEFAULT,
@@ -497,7 +541,10 @@ def parse_args(argv):
              'bounding box coordinates have been stored. '
              'Default is : ' + _BBOX_DIR_DEFAULT)
     parser.add_argument(
-        "-m", "--morphologist_dir", type=str, default=_MORPHOLOGIST_DIR_DEFAULT,
+        "-m",
+        "--morphologist_dir",
+        type=str,
+        default=_MORPHOLOGIST_DIR_DEFAULT,
         help='Directory where subjects to be processed are stored')
     parser.add_argument(
         "-u", "--sulcus", type=str, default=_SULCUS_DEFAULT, nargs='+',
@@ -514,54 +561,48 @@ def parse_args(argv):
              '0 subject is allowed, for debug purpose.'
              'Default is : all')
     parser.add_argument(
-        "-e", "--interp", type=str, default=_INTERP_DEFAULT,
-        help="Same interpolation type as for AimsApplyTransform. "
-             "Type of interpolation used for Volumes: "
-             "n[earest], l[inear], q[uadratic], c[cubic], quartic, "
-             "quintic, six[thorder], seven[thorder]. "
-             "Modes may also be specified as order number: "
-             "0=nearest, 1=linear...")
-    parser.add_argument(
-        "-p", "--resampling", type=str, default=None,
-        help='Method of resampling to perform. '
-             'Type of resampling: '
-             's[ulcus] for sulcus-based method'
-             'If None, AimsApplyTransform is used.'
-             'Default is : None')
-    parser.add_argument(
-        "-c", "--cropping", type=str, default=None,
+        "-c", "--cropping", type=str, default=_CROPPING_DEFAULT,
         help='Method of to select and crop the image. '
              'Type of cropping: '
              'bbox: for bounding box cropping'
              'mask: selection based on a mask'
-             'Default is : bbox')
+             'Default is : mask')
     parser.add_argument(
-        "-v", "--out_voxel_size", type=int, nargs='+', default=_OUT_VOXEL_SIZE,
+        "-x",
+        "--out_voxel_size",
+        type=float,
+        nargs='+',
+        default=_OUT_VOXEL_SIZE,
         help='Voxel size of output images'
-             'Default is : 1 1 1')
+        'Default is : 1 1 1')
+    parser.add_argument(
+        "-v", "--verbose",
+        default=False,
+        action='store_true',
+        help='If verbose is true, no parallelism.')
     parser.add_argument(
         "-o", "--combine_type", type=bool, default=_COMBINE_TYPE,
         help='Whether use specific combination of masks or not')
-    parser.add_argument(
-        "-d", "--dist_map", type=bool, default=_DIST_MAP_DEFAULT,
-        help='Whether crop and normalize distance map instead of skeleton')
 
     params = {}
 
     args = parser.parse_args(argv)
+
+    # Writes command line argument to target dir for logging
+    log_command_line(args, "dataset_gen_pipe.py", args.tgt_dir)
+
     params['src_dir'] = args.src_dir
+    params['graph_dir'] = args.graph_dir
     params['tgt_dir'] = args.tgt_dir
     params['bbox_dir'] = args.bbox_dir
     params['mask_dir'] = args.mask_dir
     params['list_sulci'] = args.sulcus  # a list of sulci
     params['side'] = args.side
-    params['interp'] = args.interp
-    params['resampling'] = args.resampling
     params['cropping'] = args.cropping
     params['out_voxel_size'] = tuple(args.out_voxel_size)
     params['morphologist_dir'] = args.morphologist_dir
     params['combine_type'] = args.combine_type
-    params['dist_map'] = args.dist_map
+    params['verbose'] = args.verbose
 
     number_subjects = args.nb_subjects
 
@@ -581,7 +622,8 @@ def parse_args(argv):
     return params
 
 
-def dataset_gen_pipe(src_dir=_SRC_DIR_DEFAULT,
+def dataset_gen_pipe(graph_dir=_GRAPH_DIR_DEFAULT,
+                     src_dir=_SRC_DIR_DEFAULT,
                      tgt_dir=_TGT_DIR_DEFAULT,
                      bbox_dir=_BBOX_DIR_DEFAULT,
                      mask_dir=_MASK_DIR_DEFAULT,
@@ -589,28 +631,23 @@ def dataset_gen_pipe(src_dir=_SRC_DIR_DEFAULT,
                      side=_SIDE_DEFAULT,
                      list_sulci=_SULCUS_DEFAULT,
                      number_subjects=_ALL_SUBJECTS,
-                     interp=_INTERP_DEFAULT,
-                     resampling=_RESAMPLING_DEFAULT,
                      cropping=_CROPPING_DEFAULT,
                      out_voxel_size=_OUT_VOXEL_SIZE,
                      combine_type=_COMBINE_TYPE,
-                     dist_map=_DIST_MAP_DEFAULT):
-    """Main program generating cropped files and corresponding pickle file
-    """
+                     verbose=_VERBOSE_DEFAULT):
 
-    dataset = DatasetCroppedSkeleton(src_dir=src_dir,
+    dataset = DatasetCroppedSkeleton(graph_dir=graph_dir,
+                                     src_dir=src_dir,
                                      tgt_dir=tgt_dir,
                                      bbox_dir=bbox_dir,
                                      mask_dir=mask_dir,
                                      morphologist_dir=morphologist_dir,
                                      side=side,
                                      list_sulci=list_sulci,
-                                     interp=interp,
-                                     resampling=resampling,
                                      cropping=cropping,
                                      out_voxel_size=out_voxel_size,
                                      combine_type=combine_type,
-                                     dist_map=dist_map)
+                                     verbose=verbose)
     dataset.dataset_gen_pipe(number_subjects=number_subjects)
 
 
@@ -626,21 +663,21 @@ def main(argv):
     try:
         # Parsing arguments
         params = parse_args(argv)
+
         # Actual API
-        dataset_gen_pipe(src_dir=params['src_dir'],
+        dataset_gen_pipe(graph_dir=params['graph_dir'],
+                         src_dir=params['src_dir'],
                          tgt_dir=params['tgt_dir'],
                          bbox_dir=params['bbox_dir'],
                          mask_dir=params['mask_dir'],
                          morphologist_dir=params['morphologist_dir'],
                          side=params['side'],
                          list_sulci=params['list_sulci'],
-                         interp=params['interp'],
                          number_subjects=params['nb_subjects'],
-                         resampling=params['resampling'],
                          cropping=params['cropping'],
                          out_voxel_size=params['out_voxel_size'],
                          combine_type=params['combine_type'],
-                         dist_map=params['dist_map'])
+                         verbose=params['verbose'])
     except SystemExit as exc:
         if exc.code != 0:
             six.reraise(*sys.exc_info())
