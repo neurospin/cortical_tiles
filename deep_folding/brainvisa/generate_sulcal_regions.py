@@ -21,7 +21,7 @@ log = set_file_logger(__file__)
 # The relative path leads to right outside of deep_folding directory and /data/ which is the prefered file architecture for accessing the data
 #_PATH_DATASET_ROOT_DEFAULT = os.path.join(get_nth_parent_dir(os.getcwd(), 3), 'data/') #"/neurospin/dico/data/deep_folding/current/datasets"
 # _DATASETS_DEFAULT = ["UkBioBank40"]
-_DEEPFOLDING_VERSION = "2025"
+_DEEPFOLDING_VERSION = "2026"
 _SIDES_DEFAULT = ["L", "R"]
 _INPUT_TYPES_DEFAULT = ["skeleton", "foldlabel", "extremities"]
 _REGIONS_DEFAULT = ["S.C.-sylv.", "S.C.-S.Pe.C.", "S.C.-S.Po.C.",\
@@ -159,7 +159,7 @@ def generate_sulcal_regions(regions, sides, input_types,
                             'sulci_regions_champollion_V1.json'
                         )
                     if k == "supervised_output_dir":
-                        json_dict[k] = join(get_nth_parent_dir(os.getcwd(), 3), 'deep_folding/data')
+                        json_dict[k] = join(get_nth_parent_dir(os.getcwd(), 3), 'cortical_tiles/data')
                     if k == "graphs_dir":
                         json_dict[k] = join(path_dataset, "derivatives/morphologist-6.0")
                     if k == "output_dir":
