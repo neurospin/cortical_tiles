@@ -51,6 +51,7 @@ from deep_folding.config.logs import set_file_logger, set_root_logger_level
 from deep_folding.brainvisa.utils.logs import setup_log
 
 from deep_folding.brainvisa.utils.sulcus import complete_sulci_name
+from deep_folding.brainvisa.utils.folder import get_nth_parent_dir
 
 from deep_folding.brainvisa.compute_mask import compute_mask
 from deep_folding.brainvisa.generate_crops import generate_crops
@@ -77,8 +78,10 @@ log = set_file_logger(__file__)
 def get_sulci_list(
         region_name,
         side,
-        json_path='/neurospin/dico/data/deep_folding/current/'
-                  'sulci_regions_overlap.json'):
+        json_path=os.path.join(
+            get_nth_parent_dir(os.path.abspath(__file__), 5),
+            'sulci_regions_champollion_V1.json'
+        )):
     """Gets list of sulci corresponding to a region"""
 
     with open(json_path, 'r') as file:
@@ -181,6 +184,10 @@ def parse_args(argv: list) -> dict:
         'If no option is provided then logging.INFO is selected. '
         'If one option -v (or -vv) or more is provided '
         'then logging.DEBUG is selected.')
+    parser.add_argument(
+        "--njobs", help="Number of CPU cores allowed to use. Default is your maximum number of cores - 2 or up to 22 if you have enough cores.",
+        type=int
+    )
 
     args = parser.parse_args(argv)
 
@@ -190,6 +197,8 @@ def parse_args(argv: list) -> dict:
 
     with open(params_path, 'r') as file:
         params = json.load(file)
+
+    params["njobs"] = args.njobs
 
     return params
 
@@ -310,6 +319,7 @@ def main(argv):
                 args_compute_mask['new_sulcus']
                 if args_compute_mask['new_sulcus']
                 else args_compute_mask['sulcus'])
+
             setup_log(
                 Namespace(**{'verbose': log.level,
                           **args_compute_mask}),
@@ -352,7 +362,8 @@ def main(argv):
                 'bids': params['bids'],
                 'parallel': params['parallel'],
                 'nb_subjects': params['nb_subjects'],
-                'qc_path': params['skel_qc_path']}
+                'qc_path': params['skel_qc_path'],
+                'njobs': params['njobs']}
 
             setup_log(
                 Namespace(**{'verbose': log.level,
@@ -696,7 +707,8 @@ def main(argv):
             'nb_subjects': params['nb_subjects'],
             'no_mask': params['no_mask'],
             'threshold': params['threshold'],
-            'dilation': params['dilation']}
+            'dilation': params['dilation'],
+            'njobs': params['njobs']}
 
         setup_log(Namespace(**{'verbose': log.level, **args_generate_crops}),
                   log_dir=f"{args_generate_crops['crop_dir']}",
