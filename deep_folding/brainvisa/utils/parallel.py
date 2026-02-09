@@ -47,4 +47,4 @@ def define_njobs(nb_jobs=None):
     if nb_jobs:
         return nb_jobs
     else:
-        return min(nb_cpus - 2, 22)
+        return max(1, min(nb_cpus - 2, 22))
