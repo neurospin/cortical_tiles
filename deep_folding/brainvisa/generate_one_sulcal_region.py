@@ -728,7 +728,7 @@ def main(argv):
     ##########################################################
     # generate distbottom crops
     ##########################################################
-    if params['input_type'] == 'skeleton':
+    if params['input_type'] == 'skeleton' and not params.get('skip_distbottom', False):
         path_to_distbottom_complete = path_to_crops + \
             '/' + params['side'] + "distbottom"
 
