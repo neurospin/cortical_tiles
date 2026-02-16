@@ -61,7 +61,7 @@ def read_spams(champo_root=None, resolution=resolution,
     return spam
 
 
-def save_graphs_and_meshes(spam, graphs, allmeshes, out_dir):
+def save_graphs_and_meshes(spam, graphs, allmeshes, out_dir, thresholds=None):
     dref = aims.StandardReferentials.mniTemplateReferentialID()
     try:
         try:
@@ -92,7 +92,10 @@ def save_graphs_and_meshes(spam, graphs, allmeshes, out_dir):
             aims.write(mesh, f'{out_dir}/regions_{label}_{index}.gii')
 
     lsides = {'L': 'left', 'R': 'right'}
-    for index, (th, graphl) in enumerate(graphs.items()):
+    if thresholds is None:
+        thresholds = sorted(graphs.keys(), reverse=True)
+    for index, th in enumerate(thresholds):
+        graphl = graphs[th]
         for side, graph in zip(['L', 'R'], graphl):
             aims.write(graph, f'{out_dir}/{side}regions_model_{index}.arg')
             lside = lsides[side]
@@ -107,7 +110,8 @@ if __name__ == "__main__":
     spams = read_spams(champo_root, resolution, champo_version)
     print('spams:', spams.shape)
     print(spams.header())
-    graphs, allmeshes = sulcitools.spam_to_graphs(spams)
+    thresholds = [0.7, 0.4, 0.2, 0.95/62]
+    graphs, allmeshes = sulcitools.spam_to_graphs(spams, thresholds=thresholds)
     print('graphs:', graphs)
     meshdir = f"{champo_root}/{regions_dir_pat}/meshes" \
         % {"resolution": resolution}

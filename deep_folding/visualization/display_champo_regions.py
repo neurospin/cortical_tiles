@@ -136,8 +136,9 @@ if __name__ == '__main__':
         'Display Champollion regions in several 3D views')
     parser.add_argument(
         'level', type=int, default=1, nargs='?',
-        help='threshold level in the stat map for the regions. 0: low (bigger '
-        'regioins), 1: intermediate, 2: high. Default=1')
+        help='threshold level in the stat map for the regions. 0: high, '
+        '1: intermediate, 2: low (bigger regioins), '
+        '3: min (entire large regions). Default=1')
     options = parser.parse_args()
     level = options.level
 
