@@ -1,10 +1,15 @@
 
+import os
+
 config_instance = None
 
 
 class Config:
 
-    champollion_data_root_dir = "/neurospin/dico/data/deep_folding/current"
+    champollion_data_root_dir = os.environ.get(
+        "CHAMPOLLION_DATA_ROOT",
+        "/neurospin/dico/data/deep_folding/current",
+    )
 
     def get_champollion_data_root_dir(self):
         """ get directory of model / regions data.
