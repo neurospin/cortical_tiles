@@ -267,7 +267,7 @@ class GraphConvert2FoldLabel:
         not_processed_subjects = \
             get_not_processed_subjects(list_subjects, self.foldlabel_dir)
         save_list_to_csv(not_processed_subjects,
-                         f"{self.foldlabel_dir}/../not_processed_subjects.csv")
+                         f"{self.foldlabel_dir}/../not_processed_files.csv")
 
 
 def generate_foldlabels(
