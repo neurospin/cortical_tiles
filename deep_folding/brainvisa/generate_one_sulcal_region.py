@@ -720,8 +720,9 @@ def main(argv):
         log.info('Crops generated')
 
         # save params json where the crops lie
+        _sfx = '' if cropdir_name.endswith('s') else 's'
         with open(path_to_crops +
-                  f"/pipeline_params_{params['side']}{cropdir_name}s.json",
+                  f"/pipeline_params_{params['side']}{cropdir_name}{_sfx}.json",
                   'w') as file:
             json.dump(params, file, indent=2)
 
@@ -761,8 +762,9 @@ def main(argv):
             log.info('Crops generated')
 
             # save params json where the crops lie
+            _sfx = '' if cropdir_name.endswith('s') else 's'
             with open(path_to_crops +
-                      f"/pipeline_params_{params['side']}{cropdir_name}s.json",
+                      f"/pipeline_params_{params['side']}{cropdir_name}{_sfx}.json",
                       'w') as file:
                 json.dump(params, file, indent=2)
 
