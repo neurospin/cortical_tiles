@@ -209,8 +209,9 @@ class GraphConvert2Skeleton:
         list_graph_file = glob.glob(graph_path)
         log.debug(f"list_graph_file = {list_graph_file}")
         if len(list_graph_file) == 0:
-            raise RuntimeError(f"No graph file! "
-                               f"{graph_path} does not exist")
+            log.warning(f"No graph file for subject {subject} — skipping. "
+                        f"(expected: {graph_path})")
+            return
         for graph_file in list_graph_file:
             skeleton_file = self.get_skeleton_filename(subject, graph_file)
             if not exists(skeleton_file):
