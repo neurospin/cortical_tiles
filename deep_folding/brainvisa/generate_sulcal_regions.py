@@ -146,9 +146,13 @@ def generate_sulcal_regions(regions, sides, input_types,
             json_dict = json.load(file)
 
             if "$local" not in json_dict.keys():
-                for f, v in {path_to_graph: "path_to_graph", path_sk_with_hull: "path_to_skeleton_with_hull", sk_qc_path: "skel_qc_path"}.items():
+                for f, v in {path_to_graph: "path_to_graph",
+                             path_sk_with_hull: "path_to_skeleton_with_hull"}.items():
                     if f:
                         json_dict[v] = f
+                # Always overwrite skel_qc_path (even when empty) to prevent
+                # stale values from a previous run persisting in the JSON file
+                json_dict["skel_qc_path"] = sk_qc_path
 
             # Modifying templated values in the JSON file
             for k, v in json_dict.items():
@@ -170,7 +174,7 @@ def generate_sulcal_regions(regions, sides, input_types,
                         json_dict[k] = path_to_graph
                     if k == "path_to_skeleton_with_hull" and path_sk_with_hull:
                         json_dict[k] = path_sk_with_hull
-                    if k == "skel_qc_path" and sk_qc_path:
+                    if k == "skel_qc_path":
                         json_dict[k] = sk_qc_path
             
             file.close()
