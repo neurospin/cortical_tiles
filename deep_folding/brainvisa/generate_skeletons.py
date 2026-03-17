@@ -211,7 +211,7 @@ class GraphConvert2Skeleton:
         if len(list_graph_file) == 0:
             log.warning(f"No graph file for subject {subject} — skipping. "
                         f"(expected: {graph_path})")
-            return
+            return graph_path
         for graph_file in list_graph_file:
             skeleton_file = self.get_skeleton_filename(subject, graph_file)
             if not exists(skeleton_file):
@@ -246,15 +246,23 @@ class GraphConvert2Skeleton:
         if self.parallel:
             log.info(
                 "PARALLEL MODE: subjects are computed in parallel.")
-            p_map(self.generate_one_skeleton,
-                  list_subjects,
-                  num_cpus=define_njobs(self.njobs))
+            results = p_map(self.generate_one_skeleton,
+                            list_subjects,
+                            num_cpus=define_njobs(self.njobs))
         else:
             log.info(
                 "SERIAL MODE: subjects are scanned serially, "
                 "without parallelism")
-            for sub in list_subjects:
-                self.generate_one_skeleton(sub)
+            results = [self.generate_one_skeleton(sub) for sub in list_subjects]
+
+        skipped = [r for r in results if r is not None]
+        if skipped:
+            log.warning(
+                f"\n{'='*60}\n"
+                f"Skipped {len(skipped)} subject(s) with no graph file:\n" +
+                "\n".join(f"  {p}" for p in skipped) +
+                f"\n{'='*60}"
+            )
 
         # Checks if there is expected number of generated files
         if self.bids:
