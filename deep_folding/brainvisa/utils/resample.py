@@ -25,7 +25,8 @@ def resample(input_image: Union[str, aims.Volume],
              verbose: bool = False,
              do_skel: bool = False,
              immortals: list = None,
-             redo_classif: bool = True) -> aims.Volume:
+             redo_classif: bool = True,
+             new_dim: tuple = None) -> aims.Volume:
     """
         Transforms and resamples a volume that has discret values
 
@@ -57,6 +58,9 @@ def resample(input_image: Union[str, aims.Volume],
         redo_classif:
             if True, after re-skeletonization, re-perform voxel topological
             classification. No effect if do_skel is False.
+        new_dim:
+            dimensions of the resampled volume. Default: calculated from input
+            volume and voxel size ratio.
 
         Return
         ------
@@ -94,15 +98,17 @@ def resample(input_image: Union[str, aims.Volume],
     ##################################
 
     hdr = aims.StandardReferentials.icbm2009cTemplateHeader()
-    if output_vs:
+    if output_vs is not None:
         output_vs = np.array(output_vs)
         # New volume dimensions
         resampling_ratio = np.array(hdr['voxel_size'][:3]) / output_vs
         orig_dim = hdr['volume_dimension'][:3]
-        new_dim = list((resampling_ratio * orig_dim).astype(int))
+        if new_dim is None:
+            new_dim = list((resampling_ratio * orig_dim).astype(int))
     else:
         output_vs = vol.header()['voxel_size'][:3]
-        new_dim = vol.header()['volume_dimension'][:3]
+        if new_dim is None:
+            new_dim = vol.header()['volume_dimension'][:3]
 
     log.debug("Time before resampling: {}s".format(time() - tic))
     tic = time()
@@ -110,7 +116,7 @@ def resample(input_image: Union[str, aims.Volume],
     # Transform the background
     # Using the inverse is more straightforward and supports non-linear
     # transforms
-    resampled = aims.Volume(new_dim, dtype=vol_dt.dtype)
+    resampled = aims.Volume(list(new_dim), dtype=vol_dt.dtype)
     resampled.copyHeaderFrom(hdr)
     resampled.header()['voxel_size'] = output_vs
     resampled.fill(0)
