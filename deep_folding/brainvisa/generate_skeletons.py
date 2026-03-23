@@ -211,7 +211,7 @@ class GraphConvert2Skeleton:
         if len(list_graph_file) == 0:
             log.warning(f"No graph file for subject {subject} — skipping. "
                         f"(expected: {graph_path})")
-            return graph_path
+            return (subject, graph_path)
         for graph_file in list_graph_file:
             skeleton_file = self.get_skeleton_filename(subject, graph_file)
             if not exists(skeleton_file):
@@ -256,13 +256,33 @@ class GraphConvert2Skeleton:
             results = [self.generate_one_skeleton(sub) for sub in list_subjects]
 
         skipped = [r for r in results if r is not None]
+        n_total = len(list_subjects)
+        n_skipped = len(skipped)
+        n_ok = n_total - n_skipped
+
+        # Always print a per-side summary to stdout
+        sep = "=" * 60
+        print(f"\n{sep}")
+        print(f"SKELETON GENERATION SUMMARY  (side={self.side})")
+        print(f"  Total subjects:  {n_total}")
+        print(f"  Successful:      {n_ok}")
+        print(f"  Skipped:         {n_skipped}")
         if skipped:
-            log.warning(
-                f"\n{'='*60}\n"
-                f"Skipped {len(skipped)} subject(s) with no graph file:\n" +
-                "\n".join(f"  {p}" for p in skipped) +
-                f"\n{'='*60}"
-            )
+            print(f"\n  Skipped subjects (no graph file found):")
+            for subject, expected_path in skipped:
+                print(f"    {subject}  →  {expected_path}")
+
+            # Write QC CSV so the caller can review / feed back as --sk_qc_path
+            import csv
+            qc_csv = f"{self.skeleton_dir}/skipped_subjects.csv"
+            with open(qc_csv, "w", newline="") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(["subject", "expected_graph_path"])
+                writer.writerows(skipped)
+            print(f"\n  QC file written: {qc_csv}")
+            print(f"  You can pass it with --sk_qc_path to exclude these"
+                  f" subjects from future runs.")
+        print(f"{sep}\n")
 
         # Checks if there is expected number of generated files
         if self.bids:
