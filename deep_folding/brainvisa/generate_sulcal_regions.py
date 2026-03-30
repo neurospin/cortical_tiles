@@ -6,14 +6,13 @@ import argparse
 import os
 from os.path import join
 import json
-import subprocess
 import sys
 
 from deep_folding.brainvisa.utils.folder import get_nth_parent_dir
 
 from deep_folding.brainvisa import exception_handler
-from deep_folding.brainvisa.utils.logs import setup_log
 from deep_folding.config.logs import set_file_logger
+from generate_one_sulcal_region import run_with_params
 
 # Defines logger
 log = set_file_logger(__file__)
@@ -129,103 +128,98 @@ def parse_args(argv):
     return params
 
 
+class RegionPipelineRunner:
+    """Runs the full pipeline for one region, entirely in-memory.
+
+    Instantiate with the already-resolved config dict and the region name.
+    Call run() to iterate over all sides and input_types.
+    No files are written — run_with_params() is called directly in-process.
+    """
+
+    def __init__(self, resolved_config: dict, region: str):
+        self.config = dict(resolved_config)
+        self.config["region_name"] = region
+        self.config["combine_type"] = (region == "CINGULATE.")
+        self.config["threshold"] = (
+            1 if region in (
+                "OCCIPITAL", "F.C.L.p.-subsc.-F.C.L.a.-INSULA.")
+            else 0
+        )
+
+    def run(self, sides, input_types, njobs):
+        for side in sides:
+            for input_type in input_types:
+                cfg = dict(self.config)
+                cfg["side"] = side
+                cfg["input_type"] = input_type
+                cfg["njobs"] = njobs
+                # Side-specific threshold override
+                if (cfg["region_name"] ==
+                        "F.C.L.p.-subsc.-F.C.L.a.-INSULA."
+                        and side == "L"):
+                    cfg["threshold"] = 1
+                run_with_params(cfg)
+                print(
+                    f"\nEND\n"
+                    f"{cfg['region_name']} {side} {input_type} ok\n"
+                )
+
+
 def generate_sulcal_regions(regions, sides, input_types,
                             path_dataset, verbose, output_dir, path_to_graph,
                             path_sk_with_hull, sk_qc_path, njobs):
     """Global loops to generate all regions for all dataset"""
-    
-    
-    
+
+    # Load and resolve the template ONCE — never written back
+    pipeline_json = f"{path_dataset}/pipeline_loop_2mm.json"
+    with open(pipeline_json, 'r') as f:
+        resolved_config = json.load(f)
+
+    if "$local" not in resolved_config.values():
+        for src, key in {
+            path_to_graph: "path_to_graph",
+            path_sk_with_hull: "path_to_skeleton_with_hull"
+        }.items():
+            if src:
+                resolved_config[key] = src
+        # Always overwrite skel_qc_path (even when empty) to prevent
+        # stale values from a previous run persisting in the config
+        resolved_config["skel_qc_path"] = sk_qc_path
+    else:
+        for k, v in list(resolved_config.items()):
+            if v != "$local":
+                continue
+            if k == "brain_regions_json":
+                resolved_config[k] = join(
+                    get_nth_parent_dir(os.getcwd(), 4),
+                    'sulci_regions_champollion_V1.json'
+                )
+            elif k == "supervised_output_dir":
+                resolved_config[k] = join(
+                    get_nth_parent_dir(os.getcwd(), 3),
+                    'cortical_tiles/data'
+                )
+            elif k == "graphs_dir":
+                resolved_config[k] = join(
+                    path_dataset, "derivatives/morphologist-6.0"
+                )
+            elif k == "output_dir":
+                resolved_config[k] = join(
+                    path_dataset,
+                    f"derivatives/cortical_tiles-{_CORTICAL_TILES_VERSION}"
+                    if output_dir not in ("", None) else output_dir
+                )
+            elif k == "path_to_graph" and path_to_graph:
+                resolved_config[k] = path_to_graph
+            elif k == "path_to_skeleton_with_hull" and path_sk_with_hull:
+                resolved_config[k] = path_sk_with_hull
+            elif k == "skel_qc_path":
+                resolved_config[k] = sk_qc_path
+
     for region in regions:
-        
-        #for dataset in datasets:
-        
-        # loads a already existing template
-        pipeline_json = f"{path_dataset}/pipeline_loop_2mm.json"
-        with open(pipeline_json, 'r') as file:
-            json_dict = json.load(file)
-
-            if "$local" not in json_dict.keys():
-                for f, v in {path_to_graph: "path_to_graph",
-                             path_sk_with_hull: "path_to_skeleton_with_hull"}.items():
-                    if f:
-                        json_dict[v] = f
-                # Always overwrite skel_qc_path (even when empty) to prevent
-                # stale values from a previous run persisting in the JSON file
-                json_dict["skel_qc_path"] = sk_qc_path
-
-            # Modifying templated values in the JSON file
-            for k, v in json_dict.items():
-                if v == "$local":
-                    if k == "brain_regions_json":
-                        json_dict[k] = join(
-                            get_nth_parent_dir(os.getcwd(), 4),
-                            'sulci_regions_champollion_V1.json'
-                        )
-                    if k == "supervised_output_dir":
-                        json_dict[k] = join(get_nth_parent_dir(os.getcwd(), 3), 'cortical_tiles/data')
-                    if k == "graphs_dir":
-                        json_dict[k] = join(path_dataset, "derivatives/morphologist-6.0")
-                    if k == "output_dir":
-                        json_dict[k] = join(path_dataset, f"derivatives/cortical_tiles-{_CORTICAL_TILES_VERSION}"
-                                                       if output_dir != "" or output_dir is not None
-                                                       else output_dir)
-                    if k == "path_to_graph" and path_to_graph:
-                        json_dict[k] = path_to_graph
-                    if k == "path_to_skeleton_with_hull" and path_sk_with_hull:
-                        json_dict[k] = path_sk_with_hull
-                    if k == "skel_qc_path":
-                        json_dict[k] = sk_qc_path
-            
-            file.close()
-
-        # change the parameters that need to be changed
-        # (region, side, input_type)
-        json_dict["region_name"] = region
-        for side in sides:
-            json_dict["side"] = side
-            for input_type in input_types:
-                json_dict["input_type"] = input_type
-
-                if region == "CINGULATE.":
-                    json_dict["combine_type"] = True
-                else:
-                    json_dict["combine_type"] = False
-
-                if ((region == "OCCIPITAL") or
-                        (region == "F.C.L.p.-subsc.-F.C.L.a.-INSULA.")):
-                    json_dict["threshold"] = 1
-                elif ((region == "F.C.L.p.-subsc.-F.C.L.a.-INSULA.") and
-                    (side == "L")):
-                    json_dict["threshold"] = 1
-                else:
-                    json_dict["threshold"] = 0
-
-                # replace the template json by the modified one
-                with open(pipeline_json, "w") as file2:
-                    json.dump(json_dict, file2, indent=3)
-                    file2.close()
-
-                # run the pipeline on the target region
-                # with requested parameters read from new json
-                if verbose == '':
-                    if subprocess.call(
-                            ["python3", "generate_one_sulcal_region.py",
-                            "--params_path", f"{pipeline_json}", "--njobs", str(njobs)]) != 0:
-                        raise ValueError("Error in pipeline: "
-                                        "see above for error explanations")
-                else:
-                    if subprocess.call(
-                            ["python3", "generate_one_sulcal_region.py",
-                            "--params_path", f"{pipeline_json}",
-                            f"{verbose}", "--njobs", str(njobs)]) != 0:
-                        raise ValueError("Error in pipeline: "
-                                        "see above for error explanations")
-                print("\nEND")
-                os.system("which python3")
-                print(pipeline_json)
-                print(region, path_dataset, side, input_type, "ok")
-                print("\n")
+        RegionPipelineRunner(resolved_config, region).run(
+            sides, input_types, njobs
+        )
 
 
 @exception_handler

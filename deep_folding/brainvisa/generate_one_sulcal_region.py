@@ -203,23 +203,13 @@ def parse_args(argv: list) -> dict:
     return params
 
 
-@exception_handler
-def main(argv):
-    """Main function to compute the pipeline, i.e. to compute crops from graphs
+def run_with_params(params: dict):
+    """Execute the full pipeline for one region given a resolved params dict.
 
     Args:
-        argv: a list containing command line arguments which are
-            - params_path: path to the json file where the parameters
-                for the functions called by pipeline are stored.
-            - verbose: If no option is provided then logging.INFO is selected.
-              If one option -v (or -vv) or more is provided
-              then logging.DEBUG is selected.
+        params: dictionary with all pipeline parameters (as returned by parse_args,
+                or built in-memory by RegionPipelineRunner).
     """
-
-    # Parsing arguments
-    params = parse_args(argv)
-    log.debug(params)
-
     # define shortcuts to create folders or run command lines
     if params['side'] == 'R':
         full_side = '_right'
@@ -767,6 +757,18 @@ def main(argv):
                       f"/pipeline_params_{params['side']}{cropdir_name}{_sfx}.json",
                       'w') as file:
                 json.dump(params, file, indent=2)
+
+
+@exception_handler
+def main(argv):
+    """Reads argument line and runs the pipeline for one sulcal region.
+
+    Args:
+        argv: a list containing command line arguments
+    """
+    params = parse_args(argv)
+    log.debug(params)
+    run_with_params(params)
 
 
 ######################################################################
