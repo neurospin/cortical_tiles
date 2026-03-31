@@ -259,7 +259,9 @@ def run_with_params(params: dict):
     log.info(sulci_list)
 
     # Generates supervised output paths
-    params['masks_dir'] = os.path.join(params["supervised_output_dir"], "mask")
+    masks_version = params.get("masks_version", "canonical_25")
+    params['masks_dir'] = os.path.join(
+        params["supervised_output_dir"], "mask", masks_version)
     params['bbox_dir'] = os.path.join(params["supervised_output_dir"], "bbox")
 
     # Generates unsupervised output paths

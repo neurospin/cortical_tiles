@@ -102,6 +102,11 @@ def parse_args(argv):
         "--njobs", help="Number of CPU cores allowed to use. Default is your maximum number of cores - 2 or up to 22 if you have enough cores.",
         type=int
     )
+    parser.add_argument(
+        "--masks", type=str, default=None,
+        help="Mask version tag (e.g. 'canonical_25'). "
+             "Overrides masks_version in the pipeline JSON config."
+    )
 
     params = {}
 
@@ -167,13 +172,16 @@ class RegionPipelineRunner:
 
 def generate_sulcal_regions(regions, sides, input_types,
                             path_dataset, verbose, output_dir, path_to_graph,
-                            path_sk_with_hull, sk_qc_path, njobs):
+                            path_sk_with_hull, sk_qc_path, njobs, masks=None):
     """Global loops to generate all regions for all dataset"""
 
     # Load and resolve the template ONCE — never written back
     pipeline_json = f"{path_dataset}/pipeline_loop_2mm.json"
     with open(pipeline_json, 'r') as f:
         resolved_config = json.load(f)
+
+    if masks:
+        resolved_config["masks_version"] = masks
 
     if "$local" not in resolved_config.values():
         for src, key in {
