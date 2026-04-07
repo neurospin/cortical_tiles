@@ -179,6 +179,10 @@ class GraphGenerateTransform:
 
     def generate_one_transform(self, subject: str):
         """Generates and writes ICBM2009c transform for one subject.
+
+        Returns (subject, None) on success or (subject, error_message) on
+        failure so that compute() can collect a per-subject report without
+        crashing the whole batch.
         """
         graph_path = f"{self.src_dir}/{subject}*/" +\
                      f"{self.path_to_graph}/{self.side}*.arg"
@@ -186,17 +190,23 @@ class GraphGenerateTransform:
         list_graph_file = glob.glob(graph_path)
         log.debug(f"list_graph_file = {list_graph_file}")
         if len(list_graph_file) == 0:
-            raise RuntimeError(f"No graph file! "
-                               f"{graph_path} doesn't exist")
-        for graph_file in list_graph_file:
-            transform_file = self.get_transform_filename(subject, graph_file)
-            if not exists(transform_file):
-                graph = aims.read(graph_file)
-                g_to_icbm_template = aims.GraphManip.getICBM2009cTemplateTransform(
-                    graph)
-                aims.write(g_to_icbm_template, transform_file)
-            if not self.bids:
-                break
+            msg = f"No graph file: {graph_path} doesn't exist"
+            return (subject, msg)
+        try:
+            for graph_file in list_graph_file:
+                transform_file = self.get_transform_filename(
+                    subject, graph_file)
+                if not exists(transform_file):
+                    graph = aims.read(graph_file)
+                    g_to_icbm_template = \
+                        aims.GraphManip.getICBM2009cTemplateTransform(graph)
+                    aims.write(g_to_icbm_template, transform_file)
+                if not self.bids:
+                    break
+        except Exception as exc:
+            msg = str(exc)
+            return (subject, msg)
+        return (subject, None)
 
     def get_transform_filename(self, subject, graph_file):
         transform_file = (
@@ -240,15 +250,31 @@ class GraphGenerateTransform:
         if self.parallel:
             log.info(
                 "PARALLEL MODE: transforms are generated in parallel.")
-            pqdm(list_subjects,
-                 self.generate_one_transform,
-                 n_jobs=define_njobs())
+            results = pqdm(list_subjects,
+                           self.generate_one_transform,
+                           n_jobs=define_njobs())
         else:
             log.info(
                 "SERIAL MODE: transforms are generated serially, "
                 "without parallelism")
-            for sub in list_subjects:
-                self.generate_one_transform(sub)
+            results = [self.generate_one_transform(sub)
+                       for sub in list_subjects]
+
+        # Build per-subject report (print to stdout — log goes to file)
+        failures = {sub: reason for sub, reason in results
+                    if reason is not None}
+        n_ok = len(list_subjects) - len(failures)
+        lines = [
+            "",
+            "--- Transform generation summary ---",
+            f"  Succeeded: {n_ok}/{len(list_subjects)}",
+        ]
+        if failures:
+            lines.append(f"  Skipped ({len(failures)}):")
+            for sub, reason in sorted(failures.items()):
+                lines.append(f"    {sub}: {reason}")
+        lines.append("------------------------------------")
+        print("\n".join(lines), flush=True)
 
         # Checks if there is expected number of generated files
         if self.bids:

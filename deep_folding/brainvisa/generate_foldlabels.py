@@ -209,6 +209,10 @@ class GraphConvert2FoldLabel:
 
     def generate_one_foldlabel(self, subject: str):
         """Generates and writes foldlabel for one subject.
+
+        Returns (subject, None) on success or (subject, error_message) on
+        failure so that compute() can collect a per-subject report without
+        crashing the whole batch.
         """
         # Gets graph file path
         graph_path = f"{self.src_dir}/{subject}/" +\
@@ -216,16 +220,23 @@ class GraphConvert2FoldLabel:
         list_graph_file = glob.glob(graph_path)
         log.debug(f"list_graph_file = {list_graph_file}")
         if len(list_graph_file) == 0:
-            raise RuntimeError(f"No graph file! "
-                               f"{graph_path} doesn't exist")
+            msg = f"No graph file: {graph_path} doesn't exist"
+            return (subject, msg)
 
-        for graph_file in list_graph_file:
-            foldlabel_file = self.get_foldlabel_filename(subject, graph_file)
-            if not exists(foldlabel_file):
-                generate_foldlabel_from_graph_file(
-                    graph_file, foldlabel_file, self.junction)
-            if not self.bids:
-                break
+        try:
+            for graph_file in list_graph_file:
+                foldlabel_file = self.get_foldlabel_filename(
+                    subject, graph_file)
+                if not exists(foldlabel_file):
+                    generate_foldlabel_from_graph_file(
+                        graph_file, foldlabel_file, self.junction)
+                if not self.bids:
+                    break
+        except Exception as exc:
+            msg = str(exc)
+            return (subject, msg)
+
+        return (subject, None)
 
     def compute(self, nb_subjects):
         """Loops over subjects and converts graphs into skeletons.
@@ -248,7 +259,7 @@ class GraphConvert2FoldLabel:
         if self.parallel:
             log.info(
                 "PARALLEL MODE: subjects are computed in parallel.")
-            p_map(
+            results = p_map(
                 self.generate_one_foldlabel,
                 list_subjects,
                 num_cpus=define_njobs())
@@ -256,8 +267,24 @@ class GraphConvert2FoldLabel:
             log.info(
                 "SERIAL MODE: subjects are scanned serially, "
                 "without parallelism")
-            for sub in list_subjects:
-                self.generate_one_foldlabel(sub)
+            results = [self.generate_one_foldlabel(sub)
+                       for sub in list_subjects]
+
+        # Build per-subject report (print to stdout — log goes to file)
+        failures = {sub: reason for sub, reason in results
+                    if reason is not None}
+        n_ok = len(list_subjects) - len(failures)
+        lines = [
+            "",
+            "--- Foldlabel generation summary ---",
+            f"  Succeeded: {n_ok}/{len(list_subjects)}",
+        ]
+        if failures:
+            lines.append(f"  Skipped ({len(failures)}):")
+            for sub, reason in sorted(failures.items()):
+                lines.append(f"    {sub}: {reason}")
+        lines.append("------------------------------------")
+        print("\n".join(lines), flush=True)
 
         # Checks if there is the expected number of generated files
         compare_number_aims_files_with_expected(self.foldlabel_dir,
