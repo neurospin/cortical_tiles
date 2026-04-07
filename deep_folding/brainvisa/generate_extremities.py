@@ -207,6 +207,10 @@ class GraphConvert2Extremity:
 
     def generate_one_extremity(self, subject: str):
         """Generates and writes extremity volume for one subject.
+
+        Returns (subject, None) on success or (subject, error_message) on
+        failure so that compute() can collect a per-subject report without
+        crashing the whole batch.
         """
         graph_path = f"{self.src_dir}/{subject}/" +\
                      f"{self.path_to_graph}/{self.side}*.arg"
@@ -223,30 +227,39 @@ class GraphConvert2Extremity:
             f"list_skeleton_with_hull_file = {list_skeleton_with_hull_file}")
 
         if len(list_graph_file) == 0:
-            raise RuntimeError(f"No graph file! "
-                               f"{graph_path} does not exist")
+            msg = f"No graph file! {graph_path} does not exist"
+            return (subject, msg)
         if len(list_skeleton_with_hull_file) == 0:
-            raise RuntimeError(
-                f"No skeleton_with_hull file! "
-                f"{skeleton_with_hull_path} does not exist "
-                f"or does not contain {self.side}skeleton files")
+            msg = (f"No skeleton_with_hull file! "
+                   f"{skeleton_with_hull_path} does not exist "
+                   f"or does not contain {self.side}skeleton files")
+            return (subject, msg)
         if len(list_graph_file) != len(list_skeleton_with_hull_file):
-            raise RuntimeError(
-                "Different number of graph files "
-                "and skeleton with hull files! "
-                f"Graph files = {list_graph_file}. "
-                f"Skeleton with hull files = {list_skeleton_with_hull_file}")
+            msg = ("Different number of graph files "
+                   "and skeleton with hull files! "
+                   f"Graph files = {list_graph_file}. "
+                   "Skeleton with hull files = "
+                   f"{list_skeleton_with_hull_file}")
+            return (subject, msg)
 
-        for graph_file, skeleton_with_hull_file in \
-                zip(list_graph_file, list_skeleton_with_hull_file):
-            extremity_file = self.get_extremity_filename(subject, graph_file)
-            log.debug(f"skeleton_with_hull_file = {skeleton_with_hull_file}")
-            if not exists(extremity_file):
-                generate_extremities_from_graph_file(graph_file,
-                                                    skeleton_with_hull_file,
-                                                    extremity_file)
-            if not self.bids:
-                break
+        try:
+            for graph_file, skeleton_with_hull_file in \
+                    zip(list_graph_file, list_skeleton_with_hull_file):
+                extremity_file = self.get_extremity_filename(subject,
+                                                             graph_file)
+                log.debug(
+                    f"skeleton_with_hull_file = {skeleton_with_hull_file}")
+                if not exists(extremity_file):
+                    generate_extremities_from_graph_file(
+                        graph_file,
+                        skeleton_with_hull_file,
+                        extremity_file)
+                if not self.bids:
+                    break
+        except Exception as exc:
+            msg = str(exc)
+            return (subject, msg)
+        return (subject, None)
 
     def compute(self, nb_subjects):
         """Loops over subjects and converts graphs into skeletons.
@@ -274,15 +287,31 @@ class GraphConvert2Extremity:
         if self.parallel:
             log.info(
                 "PARALLEL MODE: subjects are computed in parallel.")
-            p_map(self.generate_one_extremity,
-                  list_subjects,
-                  num_cpus=define_njobs())
+            results = p_map(self.generate_one_extremity,
+                            list_subjects,
+                            num_cpus=define_njobs())
         else:
             log.info(
                 "SERIAL MODE: subjects are scanned serially, "
                 "without parallelism")
-            for sub in list_subjects:
-                self.generate_one_extremity(sub)
+            results = [self.generate_one_extremity(sub)
+                       for sub in list_subjects]
+
+        # Build per-subject report (print to stdout — log goes to file)
+        failures = {sub: reason for sub, reason in results
+                    if reason is not None}
+        n_ok = len(list_subjects) - len(failures)
+        lines = [
+            "",
+            "--- Extremity generation summary ---",
+            f"  Succeeded: {n_ok}/{len(list_subjects)}",
+        ]
+        if failures:
+            lines.append(f"  Skipped ({len(failures)}):")
+            for sub, reason in sorted(failures.items()):
+                lines.append(f"    {sub}: {reason}")
+        lines.append("------------------------------------")
+        print("\n".join(lines), flush=True)
 
         # Checks if there is expected number of generated files
         if self.bids:
