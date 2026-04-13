@@ -278,6 +278,7 @@ class MaskAroundSulcus:
                                self.out_voxel_size,
                                self.mask_sample_dir)
 
+                log.info(f"{self.sulcus}: max = {self.mask.np.max()}")
                 # Saving of generated masks
                 write_mask(self.mask, self.mask_file)
 
