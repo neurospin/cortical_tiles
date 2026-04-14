@@ -29,3 +29,9 @@ notebooks/*.mesh.minf
 ##################################
 .idea
 venv
+
+
+# OMC #
+#######
+.omc/
+.omc/*
