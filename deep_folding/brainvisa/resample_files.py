@@ -360,14 +360,17 @@ class FileResampler:
 
         # Performs the resampling
         if os.path.exists(src_file):
-            self.resample_one_subject(
-                src_file=src_file,
-                out_voxel_size=self.out_voxel_size,
-                transform_file=transform_file,
-                resampled_file=resampled_file,
-                do_skel=self.do_skel,
-                immortals=self.immortals)
-            # aims.write(resampled, resampled_file)
+            try:
+                self.resample_one_subject(
+                    src_file=src_file,
+                    out_voxel_size=self.out_voxel_size,
+                    transform_file=transform_file,
+                    resampled_file=resampled_file,
+                    do_skel=self.do_skel,
+                    immortals=self.immortals)
+                # aims.write(resampled, resampled_file)
+            except Exception as e:
+                log.warning(f"[skip] subject {subject_id}: failed to resample {src_file}: {e}")
         else:
             raise FileNotFoundError(f"{src_file} not found")
 
