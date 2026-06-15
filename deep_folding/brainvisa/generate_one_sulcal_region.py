@@ -271,7 +271,7 @@ def run_with_params(params: dict):
     params['distmaps_dir'] = os.path.join(params["output_dir"], "distmaps")
     params['foldlabel_dir'] = os.path.join(params["output_dir"], "foldlabels")
     params['transform_dir'] = os.path.join(params["output_dir"], "transforms")
-    params['crops_dir'] = os.path.join(params["output_dir"], "crops")
+    params['crops_dir'] = os.path.join(params["output_dir"], "crops", masks_version)
 
     ##########################################################
     # generate masks
