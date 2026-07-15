@@ -1,6 +1,6 @@
 
-Deep folding
-------------
+Cortical tiles
+--------------
 
 The project aims to study cortical folding patterns thanks to deep learning tools.
 MRIs are processed through BrainVISA/Morphologist tools.
