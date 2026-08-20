@@ -39,7 +39,7 @@ First install aims, anatomist and morphologist library:
   mkdir env_pixi
   cd env_pixi
   pixi init -c conda-forge -c https://brainvisa.info/neuro-forge
-  pixi add anatomist soma-env=0.0 morphologist pip ipykernel 
+  pixi add anatomist morphologist pip ipykernel
 
 Then, activate the pixi shell and install deep_folding:
 
