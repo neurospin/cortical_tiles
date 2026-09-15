@@ -1,4 +1,4 @@
-Welcome to deep_folding's documentation!
+Welcome to cortical_tiles's documentation!
 ========================================
 
 
@@ -20,6 +20,6 @@ Indices and tables
    :maxdepth: 6
    :caption: API documentation
 
-   deep_folding
+   cortical_tiles
 
 

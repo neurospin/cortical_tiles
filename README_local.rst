@@ -8,9 +8,9 @@ MRIs are processed through BrainVISA/Morphologist tools.
 Prerequisites
 -------------
 
-Brainvisa parts (deep_folding.brainvisa) must run with brainvisa installed (see steps below)
+Brainvisa parts (cortical_tiles.brainvisa) must run with brainvisa installed (see steps below)
 
-Package documentation can be found at `https://neurospin.github.io/deep_folding/index.html <https://neurospin.github.io/deep_folding/index.html>`_.
+Package documentation can be found at `https://neurospin.github.io/cortical_tiles/index.html <https://neurospin.github.io/cortical_tiles/index.html>`_.
 
 Generates datasets of crops
 ---------------------------
@@ -18,10 +18,10 @@ Generates datasets of crops
 Deep learning pipelines to investigate folding patterns are not working on the whole brain (or the whole hemisphere) but on brain crops.
 Several processings are required, as drawn here:
 
-.. image:: docs/deep_folding.png
+.. image:: docs/cortical_tiles.png
   :width: 1000
  
-We give a step-by-step description of the pipeline in `<deep_folding/brainvisa/README.rst>`_.
+We give a step-by-step description of the pipeline in `<cortical_tiles/brainvisa/README.rst>`_.
 
 The pixi way (recommended)
 --------------------------
@@ -41,14 +41,14 @@ First install aims, anatomist and morphologist library:
   pixi init -c conda-forge -c https://brainvisa.info/neuro-forge
   pixi add anatomist soma-env=0.0 morphologist pip ipykernel 
 
-Then, activate the pixi shell and install deep_folding:
+Then, activate the pixi shell and install cortical_tiles:
 
 .. code-block:: shell
 
   pixi shell
-  # Install deep_folding
-  git clone https://github.com/neurospin/deep_folding.git
-  cd deep_folding
+  # Install cortical_tiles
+  git clone https://github.com/neurospin/cortical_tiles.git
+  cd cortical_tiles
   SKLEARN_ALLOW_DEPRECATED_SKLEARN_PACKAGE_INSTALL=True pip3 install -e .
   
   # Launch the tests to check the installation
@@ -59,11 +59,11 @@ Development
 
 .. code-block:: shell
 
-    git clone https://github.com/neurospin/deep_folding.git
+    git clone https://github.com/neurospin/cortical_tiles.git
 
     # Install for development
     bv bash
-    cd deep_folding
+    cd cortical_tiles
     virtualenv --python=python3 --system-site-packages venv
     . venv/bin/activate
     # To avoid the scikit-learn naming error use 

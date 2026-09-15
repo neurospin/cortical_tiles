@@ -2,8 +2,8 @@ import os
 import glob
 import json
 
-from deep_folding.brainvisa import compute_bounding_box
-from deep_folding.brainvisa.utils.constants import _ALL_SUBJECTS
+from cortical_tiles.brainvisa import compute_bounding_box
+from cortical_tiles.brainvisa.utils.constants import _ALL_SUBJECTS
 
 
 # Gets the source directory

@@ -3,8 +3,8 @@ from soma import aims
 import numpy as np
 import random
 import dico_toolbox as dtx
-from deep_folding.brainvisa import generate_foldlabels
-from deep_folding.brainvisa.utils.constants import _ALL_SUBJECTS
+from cortical_tiles.brainvisa import generate_foldlabels
+from cortical_tiles.brainvisa.utils.constants import _ALL_SUBJECTS
 
 foldlabel_dir = 'data/test'
 
@@ -36,7 +36,7 @@ def apply_mask(arr, mask):
     arr: array on which apply the mask
     mask: name of the mask to apply
     """
-    #mask_dir = '/home/lg261972/Documents/deep_folding/data/reference/mask/R'
+    #mask_dir = '/home/lg261972/Documents/cortical_tiles/data/reference/mask/R'
     mask_dir = os.path.join(os.getcwd(), 'data/reference/mask/R')
     mask = aims.read(os.path.join(mask_dir, mask + '.nii.gz'))
     mask = np.asarray(mask)
@@ -55,7 +55,7 @@ def test_generate_foldlabels_value_correspondance():
     random.seed(0)
 
     for mask in list_masks:
-        #data_dir = '/home/lg261972/Documents/deep_folding/data/reference/foldlabel'
+        #data_dir = '/home/lg261972/Documents/cortical_tiles/data/reference/foldlabel'
         data_dir = os.path.join(os.getcwd(), 'data/reference/foldlabel')
         foldlabel = aims.read(os.path.join(data_dir,
                             'Rresampled_foldlabel_129533.nii.gz'))

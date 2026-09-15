@@ -17,7 +17,7 @@ print(sys.path)
 
 # -- Project information -----------------------------------------------------
 
-project = u'deep_folding'
+project = u'cortical_tiles'
 copyright = u'2021, Louise Guillon et Joel Chavas'
 author = u'Louise Guillon et Joel Chavas'
 
@@ -100,7 +100,7 @@ html_sidebars = {
 # -- Options for HTMLHelp output ------------------------------------------
 
 # Output file base name for HTML help builder.
-htmlhelp_basename = 'deep_folding'
+htmlhelp_basename = 'cortical_tiles'
 
 
 # -- Options for LaTeX output ---------------------------------------------
@@ -127,7 +127,7 @@ latex_elements = {
 # (source start file, target name, title,
 #  author, documentclass [howto, manual, or own class]).
 latex_documents = [
-    (master_doc, 'deep_folding.tex', u'deep_folding Documentation',
+    (master_doc, 'cortical_tiles.tex', u'cortical_tiles Documentation',
      u'Joel Chavas, Louise Guillon', 'manual'),
 ]
 
@@ -137,7 +137,7 @@ latex_documents = [
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
 man_pages = [
-    (master_doc, 'deep_folding', u'deep_folding Documentation',
+    (master_doc, 'cortical_tiles', u'cortical_tiles Documentation',
      [author], 1)
 ]
 
@@ -148,8 +148,8 @@ man_pages = [
 # (source start file, target name, title, author,
 #  dir menu entry, description, category)
 texinfo_documents = [
-    (master_doc, 'deep_folding', u'deep_folding Documentation',
-     author, 'deep_folding', 'One line description of project.',
+    (master_doc, 'cortical_tiles', u'cortical_tiles Documentation',
+     author, 'cortical_tiles', 'One line description of project.',
      'Miscellaneous'),
 ]
 

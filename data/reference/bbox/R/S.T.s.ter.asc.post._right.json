@@ -29,6 +29,6 @@
         "/neurospin/dico/data/bv_databases/human/pclean/all"
     ], 
     "sulcus": "S.T.s.ter.asc.post._right", 
-    "tgt_dir": "/neurospin/dico/deep_folding_data/data/bbox", 
+    "tgt_dir": "/neurospin/dico/cortical_tiles_data/data/bbox", 
     "timestamp": 1619454602.085373
 }

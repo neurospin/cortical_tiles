@@ -9,8 +9,8 @@
         129,
         33
     ],
-    "bbox_dir": "/home/lg261972/Documents/deep_folding/data/reference/bbox",
-    "cropped_dir": "/home/lg261972/Documents/deep_folding/data/target/data/linear/Lcrops",
+    "bbox_dir": "/home/lg261972/Documents/cortical_tiles/data/reference/bbox",
+    "cropped_dir": "/home/lg261972/Documents/cortical_tiles/data/target/data/linear/Lcrops",
     "date": "2021-06-18 16:48:38",
     "git_sha": "1fc62a7f1ce1bf334303327c46a5fa10d60ea4b6",
     "interp": "linear",
@@ -24,11 +24,11 @@
         1,
         1
     ],
-    "repo_working_dir": "/home/lg261972/Documents/deep_folding",
+    "repo_working_dir": "/home/lg261972/Documents/cortical_tiles",
     "resampling_type": "AimsApplyTransform",
     "side": "L",
-    "src_dir": "/home/lg261972/Documents/deep_folding/data/source/unsupervised",
-    "tgt_dir": "/home/lg261972/Documents/deep_folding/data/target/data/linear",
+    "src_dir": "/home/lg261972/Documents/cortical_tiles/data/source/unsupervised",
+    "tgt_dir": "/home/lg261972/Documents/cortical_tiles/data/target/data/linear",
     "timestamp": 1624027718.7280512,
-    "transform_dir": "/home/lg261972/Documents/deep_folding/data/reference/transform"
+    "transform_dir": "/home/lg261972/Documents/cortical_tiles/data/reference/transform"
 }

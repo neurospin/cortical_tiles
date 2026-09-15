@@ -1,5 +1,5 @@
-from deep_folding.brainvisa import generate_crops
-from deep_folding.brainvisa.utils.constants import _ALL_SUBJECTS
+from cortical_tiles.brainvisa import generate_crops
+from cortical_tiles.brainvisa.utils.constants import _ALL_SUBJECTS
 
 crop_dir = 'data/test'
 
