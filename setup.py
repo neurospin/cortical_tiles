@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 
 release_info = {}
 python_dir = os.path.dirname(__file__)
-with open(os.path.join(python_dir, "deep_folding", "info.py")) as f:
+with open(os.path.join(python_dir, "cortical_tiles", "info.py")) as f:
     code = f.read()
     exec(code, release_info)
 

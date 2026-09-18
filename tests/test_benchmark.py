@@ -2,12 +2,12 @@ from soma import aims
 import numpy as np
 import pandas as pd
 import os
-from deep_folding.brainvisa.benchmark_generation_distmap import Benchmark
+from cortical_tiles.brainvisa.benchmark_generation_distmap import Benchmark
 
 # if os.path.isdir('/neurospin/'):
-#     mask_dir='/neurospin/dico/data/deep_folding/current/mask/1mm/'
+#     mask_dir='/neurospin/dico/data/cortical_tiles/current/mask/1mm/'
 # else:
-#     mask_dir = '/nfs/neurospin/dico/data/deep_folding/current/mask/1mm/'
+#     mask_dir = '/nfs/neurospin/dico/data/cortical_tiles/current/mask/1mm/'
 
 mask_dir = os.path.join(os.getcwd(), 'data/mask/1mm')
 

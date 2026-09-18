@@ -1,6 +1,6 @@
 #!/bin/bash
 
-BUILDDIR=../../deep_folding_docs
+BUILDDIR=../../cortical_tiles_docs
 
 if [ ! -d $BUILDDIR/html ]; then
     cd source

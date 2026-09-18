@@ -5,8 +5,8 @@ import numpy as np
 
 from soma import aims
 
-from deep_folding.brainvisa import resample_files
-from deep_folding.brainvisa.utils.constants import _ALL_SUBJECTS
+from cortical_tiles.brainvisa import resample_files
+from cortical_tiles.brainvisa.utils.constants import _ALL_SUBJECTS
 
 resampled_dir = 'data/test'
 

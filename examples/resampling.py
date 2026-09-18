@@ -1,5 +1,5 @@
 from soma import aims
-from deep_folding.anatomist_tools.utils.resample import resample
+from cortical_tiles.anatomist_tools.utils.resample import resample
 import numpy as np
 from time import time
 import os
