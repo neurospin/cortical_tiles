@@ -29,16 +29,16 @@
         151,
         61
     ],
-    "bbox_dir": "/host/volatile/jc225751/Runs/30_clean_deep_folding/Program/deep_folding/data/target/bbox",
+    "bbox_dir": "/host/volatile/jc225751/Runs/30_clean_cortical_tiles/Program/cortical_tiles/data/target/bbox",
     "date": "2022-01-12 11:11:54",
     "git_sha": "d6adf051fa8eab17cc2be3942ad05e4e15341cb8",
     "is_git": true,
     "nb_subjects": 1,
     "out_voxel_size": 1,
-    "repo_working_dir": "/host/volatile/jc225751/Runs/30_clean_deep_folding/Program/deep_folding",
+    "repo_working_dir": "/host/volatile/jc225751/Runs/30_clean_cortical_tiles/Program/cortical_tiles",
     "side": "L",
     "src_dir": [
-        "/host/volatile/jc225751/Runs/30_clean_deep_folding/Program/deep_folding/data/source/supervised"
+        "/host/volatile/jc225751/Runs/30_clean_cortical_tiles/Program/cortical_tiles/data/source/supervised"
     ],
     "sulcus": "S.T.s.ter.asc.ant._left",
     "timestamp": 1641982314.3755722

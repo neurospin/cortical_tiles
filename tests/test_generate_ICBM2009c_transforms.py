@@ -1,5 +1,5 @@
-from deep_folding.brainvisa import generate_ICBM2009c_transforms
-from deep_folding.brainvisa.utils.constants import _ALL_SUBJECTS
+from cortical_tiles.brainvisa import generate_ICBM2009c_transforms
+from cortical_tiles.brainvisa.utils.constants import _ALL_SUBJECTS
 
 transform_dir = 'data/test'
 

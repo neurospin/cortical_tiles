@@ -6,11 +6,11 @@
 SPHINXOPTS    =
 SPHINXBUILD   = python3 -msphinx
 SOURCEDIR     = .
-BUILDDIR      = ../../../deep_folding_docs
+BUILDDIR      = ../../../cortical_tiles_docs
 
 # Variables to generate .rst files through apidoc
 SPHINXAPIDOC  = sphinx-apidoc 
-MODULEDIR     = ../../deep_folding
+MODULEDIR     = ../../cortical_tiles
 
 # Put it first so that "make" without argument is like "make help".
 help:
@@ -30,7 +30,7 @@ firstbuild:
 	@$(SPHINXAPIDOC) -f -o "$(SOURCEDIR)" "$(MODULEDIR)"
 	cd $(SOURCEDIR) && rm modules.rst
 	mkdir -p $(BUILDDIR)
-	cd $(BUILDDIR) && git clone -b gh-pages --single-branch https://github.com/neurospin/deep_folding.git html
+	cd $(BUILDDIR) && git clone -b gh-pages --single-branch https://github.com/neurospin/cortical_tiles.git html
 
 # It builds the html documentation and commits locally in the branch gh-pages
 buildandcommit: html

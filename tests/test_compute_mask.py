@@ -1,5 +1,5 @@
-from deep_folding.brainvisa import compute_mask
-from deep_folding.brainvisa.utils.constants import _ALL_SUBJECTS
+from cortical_tiles.brainvisa import compute_mask
+from cortical_tiles.brainvisa.utils.constants import _ALL_SUBJECTS
 
 mask_dir = 'data/test'
 

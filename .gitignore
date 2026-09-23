@@ -12,7 +12,7 @@ notebooks/.vscode
 notebooks/test
 notebooks/mni_icbm152_nlin_asym_09c
 .vscode
-deep_folding/brainvisa/test
+cortical_tiles/brainvisa/test
 data/test
 data/target
 
