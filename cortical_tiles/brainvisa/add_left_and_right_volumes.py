@@ -59,7 +59,7 @@ from cortical_tiles.config.logs import set_file_logger
 
 # Import constants
 from cortical_tiles.brainvisa.utils.constants import \
-    _ALL_SUBJECTS, _SRC_DIR_DEFAULT, _SKELETON_DIR_DEFAULT \
+    _SRC_DIR_DEFAULT, _SKELETON_DIR_DEFAULT \
 
 _SRC_FILENAME_DEFAULT = "resampled_skeleton"
 _OUTPUT_FILENAME_DEFAULT = "resampled_skeleton"
@@ -246,7 +246,7 @@ def add_left_and_right_volumes(src_dir=_SRC_DIR_DEFAULT,
                      src_filename=_SRC_FILENAME_DEFAULT,
                      output_filename=_OUTPUT_FILENAME_DEFAULT,
                      parallel=False,
-                     number_subjects=_ALL_SUBJECTS):
+                     number_subjects="all"):
     """ Add left and right volumes"""
 
     # Initialization
