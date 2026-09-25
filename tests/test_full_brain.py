@@ -9,6 +9,8 @@ Covers:
   when called without number_subjects.
 - REQ-FULLBRAIN-04: remove_ventricle(side="F") raises, naming the subject,
   when a ventricle voxel index falls outside the source volume.
+- REQ-FULLBRAIN-05: remove_ventricle(side="F") given a transform_dir zeroes
+  the ventricle where resample() maps it on the resampled grid.
 
 Requirements are tracked in champollion_pipeline's elm/REQUIREMENTS.md.
 """
@@ -24,6 +26,7 @@ from cortical_tiles.brainvisa.add_left_and_right_volumes import (
     add_left_and_right_volumes,
 )
 from cortical_tiles.brainvisa.remove_ventricle import remove_ventricle
+from cortical_tiles.brainvisa.utils.resample import resample
 from soma import aims
 
 _DATA_DIR = join(dirname(dirname(os.path.abspath(__file__))), "data")
@@ -221,3 +224,90 @@ class TestRemoveVentricleGridMismatch:
                 parallel=parallel,
             )
         assert _SUBJECT in str(excinfo.value), f"exception message does not name subject {_SUBJECT}: {excinfo.value!r}"
+
+
+# ---------------------------------------------------------------------------
+# REQ-FULLBRAIN-05
+# ---------------------------------------------------------------------------
+
+# Voxel size of the resampled skeletons run_cortical_tiles.py fuses into F/
+# (pipeline_loop_2mm.json): the source volume remove_ventricle(side="F")
+# actually receives in the pipeline.
+_RESAMPLED_VOXEL_SIZE = (2.0, 2.0, 2.0)
+
+
+def _write_icbm_transforms(transform_dir):
+    """Write <transform_dir>/<side>/<side>transform_to_ICBM2009c_<subject>.trm
+    for both sides, exactly as generate_ICBM2009c_transforms does."""
+    transforms = {}
+    for side in ("L", "R"):
+        trm = aims.GraphManip.getICBM2009cTemplateTransform(aims.read(_graph_path(side)))
+        side_dir = join(transform_dir, side)
+        os.makedirs(side_dir)
+        aims.write(trm, join(side_dir, f"{side}transform_to_ICBM2009c_{_SUBJECT}.trm"))
+        transforms[side] = trm
+    return transforms
+
+
+def _resampled_ventricle_mask(transforms):
+    """Oracle: where resample() -- the function that produced the resampled
+    skeletons -- sends each side's native ventricle voxels, with that side's
+    transform and the resampled voxel size. Returns (mask, header source)."""
+    native = aims.read(_NATIVE_SKELETON)
+    mask = None
+    resampled = None
+    for side in ("L", "R"):
+        marked = aims.Volume(list(native.np.shape[:3]), dtype="S16")
+        marked.copyHeaderFrom(native.header())
+        marked.fill(0)
+        for voxel in _ventricle_voxels(_graph_path(side)):
+            marked[voxel] = 1
+        resampled = resample(marked, transforms[side], output_vs=_RESAMPLED_VOXEL_SIZE)
+        side_mask = np.asarray(resampled)[..., 0] != 0
+        mask = side_mask if mask is None else mask | side_mask
+    return mask, resampled
+
+
+class TestRemoveVentricleResampledGrid:
+    def test_side_f_zeroes_ventricle_at_resampled_grid_location(self, tmp_path):
+        transform_dir = str(tmp_path / "transforms")
+        transforms = _write_icbm_transforms(transform_dir)
+        expected_zeroed, grid = _resampled_ventricle_mask(transforms)
+        shape = expected_zeroed.shape
+
+        # Sanity: the oracle is non-trivial, and it differs from writing the
+        # graphs' raw native indices into the resampled array (the defect).
+        assert expected_zeroed.any(), "no ventricle voxel survives resampling"
+        raw_in_bounds = np.zeros(shape, dtype=bool)
+        for voxel in _ventricle_voxels(_graph_path("L")) | _ventricle_voxels(_graph_path("R")):
+            if all(c < s for c, s in zip(voxel, shape)):
+                raw_in_bounds[voxel] = True
+        assert not np.array_equal(raw_in_bounds, expected_zeroed), "raw indices coincide with the resampled location"
+
+        src_dir = tmp_path / "skeletons"
+        (src_dir / "F").mkdir(parents=True)
+        source = aims.Volume(list(shape), dtype="S16")
+        source.copyHeaderFrom(grid.header())
+        source.fill(30)
+        aims.write(source, str(src_dir / "F" / f"Fresampled_skeleton_{_SUBJECT}.nii.gz"))
+        output_dir = tmp_path / "whole_brain"
+
+        remove_ventricle(
+            side="F",
+            src_dir=str(src_dir),
+            output_dir=str(output_dir),
+            morpho_dir=_MORPHO_DIR,
+            path_to_graph=_PATH_TO_GRAPH,
+            labelling_session=_LABELLING_SESSION,
+            src_filename="resampled_skeleton",
+            transform_dir=transform_dir,
+        )
+
+        outputs = glob.glob(str(output_dir / "F" / "*.nii.gz"))
+        assert len(outputs) == 1, f"expected one F output, got {outputs}"
+        result = np.asarray(aims.read(outputs[0]))[..., 0]
+        assert result.shape == shape
+
+        expected = np.full(shape, 30, dtype=np.int16)
+        expected[expected_zeroed] = 0
+        np.testing.assert_array_equal(result, expected)

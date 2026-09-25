@@ -157,6 +157,30 @@ def parse_args(argv):
     return params
 
 
+def get_transform_filename(side_transform_dir, side, subject, graph_file, bids):
+    """Builds the .trm filename for one subject/side's ICBM2009c transform.
+
+    side_transform_dir is the side-specific directory
+    (i.e. <transform_dir>/<side>), matching GraphGenerateTransform's own
+    self.transform_dir layout.
+    """
+    transform_file = (
+        f"{side_transform_dir}/"
+        f"{side}transform_to_ICBM2009c_{subject}")
+    if bids:
+        session = re.search("ses-([^_/]+)", graph_file)
+        acquisition = re.search("acq-([^_/]+)", graph_file)
+        run = re.search("run-([^_/]+)", graph_file)
+        if session:
+            transform_file += f"_{session[0]}"
+        if acquisition:
+            transform_file += f"_{acquisition[0]}"
+        if run:
+            transform_file += f"_{run[0]}"
+    transform_file += ".trm"
+    return transform_file
+
+
 class GraphGenerateTransform:
     """Class to convert all graphs from a folder into skeletons
 
@@ -209,21 +233,8 @@ class GraphGenerateTransform:
         return (subject, None)
 
     def get_transform_filename(self, subject, graph_file):
-        transform_file = (
-            f"{self.transform_dir}/"
-            f"{self.side}transform_to_ICBM2009c_{subject}")
-        if self.bids:
-            session = re.search("ses-([^_/]+)", graph_file)
-            acquisition = re.search("acq-([^_/]+)", graph_file)
-            run = re.search("run-([^_/]+)", graph_file)
-            if session:
-                transform_file += f"_{session[0]}"
-            if acquisition:
-                transform_file += f"_{acquisition[0]}"
-            if run:
-                transform_file += f"_{run[0]}"
-        transform_file += ".trm"
-        return transform_file
+        return get_transform_filename(
+            self.transform_dir, self.side, subject, graph_file, self.bids)
 
     def compute(self, nb_subjects):
         """Loops over subjects to generate transforms to ICBM2009c from graphs.

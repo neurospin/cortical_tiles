@@ -58,6 +58,9 @@ from cortical_tiles.brainvisa.utils.parallel import define_njobs
 from cortical_tiles.brainvisa.utils.quality_checks import \
     compare_number_aims_files_with_expected, \
     get_not_processed_files_general
+from cortical_tiles.brainvisa.utils.resample import resample
+from cortical_tiles.brainvisa.generate_ICBM2009c_transforms import \
+    get_transform_filename
 from cortical_tiles.config.logs import set_file_logger
 
 # Import constants
@@ -89,9 +92,10 @@ def _check_voxels_in_bounds(voxels, shape, bucket_name):
         )
 
 
-def remove_ventricle_from_graph(volume, labelled_graph, background=0):
-    arr = np.asarray(volume)
-    shape = arr.shape[:3]
+def _get_ventricle_buckets(labelled_graph):
+    """Returns [(bucket_name, voxels_ndarray), ...] for every non-empty
+    ventricle bucket in labelled_graph, across all vertices/edges."""
+    buckets = []
     for vertex in labelled_graph.vertices():
         label = vertex.get("label", "unknown")
         if label.startswith("ventricle"):
@@ -102,18 +106,74 @@ def remove_ventricle_from_graph(volume, labelled_graph, background=0):
                             vertex.edges()[edge][bucket_name][0].keys())
                         if voxels.shape == (0,):
                             continue
-                        _check_voxels_in_bounds(voxels, shape, bucket_name)
-                        for i, j, k in voxels:
-                            arr[i, j, k] = background
+                        buckets.append((bucket_name, voxels))
             for bucket_name in ('aims_bottom', 'aims_other', 'aims_ss'):
                 bucket = vertex.get(bucket_name)
                 if bucket is not None:
                     voxels = np.array(bucket[0].keys())
                     if voxels.shape == (0,):
                         continue
-                    _check_voxels_in_bounds(voxels, shape, bucket_name)
-                    for i, j, k in voxels:
-                        arr[i, j, k] = background
+                    buckets.append((bucket_name, voxels))
+    return buckets
+
+
+def _make_ventricle_marker(voxels, voxel_size):
+    """Builds an S16 aims.Volume with 1 at each voxel index, 0 elsewhere,
+    sized to fit every voxel. Raises VentricleVoxelOutOfBoundsError on a
+    negative index (marker sizing can't accommodate that)."""
+    if (voxels < 0).any():
+        bad = voxels[(voxels < 0).any(axis=1)]
+        raise VentricleVoxelOutOfBoundsError(
+            f"ventricle voxel(s) have negative index: e.g. {tuple(bad[0])}"
+        )
+    dims = list((voxels.max(axis=0) + 1).astype(int))
+    marker = aims.Volume(dims, dtype="S16")
+    marker.header()['voxel_size'] = list(voxel_size)
+    marker.fill(0)
+    for i, j, k in voxels:
+        marker[i, j, k] = 1
+    return marker
+
+
+def _compute_resampled_ventricle_mask(labelled_graph, transform, output_vs):
+    """Returns a boolean ndarray (on the resampled grid) of voxels the
+    ventricle maps onto, or None if this graph has no ventricle voxels."""
+    buckets = _get_ventricle_buckets(labelled_graph)
+    if not buckets:
+        return None
+    voxel_size = labelled_graph["voxel_size"]
+    mask = None
+    for _, voxels in buckets:
+        marker = _make_ventricle_marker(voxels, voxel_size)
+        resampled = resample(marker, transform, output_vs=output_vs)
+        side_mask = np.asarray(resampled)[..., 0] != 0
+        mask = side_mask if mask is None else (mask | side_mask)
+    return mask
+
+
+def remove_ventricle_from_graph(volume, labelled_graph, background=0,
+                                 transform=None):
+    arr = np.asarray(volume)
+    shape = arr.shape[:3]
+
+    if transform is not None:
+        output_vs = np.asarray(volume.header()['voxel_size'][:3])
+        mask = _compute_resampled_ventricle_mask(
+            labelled_graph, transform, output_vs)
+        if mask is None:
+            return volume
+        if mask.shape != shape:
+            raise VentricleVoxelOutOfBoundsError(
+                f"resampled ventricle mask shape {mask.shape} does not "
+                f"match target volume grid {shape}"
+            )
+        arr[mask] = background
+        return volume
+
+    for bucket_name, voxels in _get_ventricle_buckets(labelled_graph):
+        _check_voxels_in_bounds(voxels, shape, bucket_name)
+        for i, j, k in voxels:
+            arr[i, j, k] = background
     return volume
 
 
@@ -208,6 +268,16 @@ def parse_args(argv):
     return params
 
 
+def _get_side_list(side):
+    return ["L", "R"] if side == "F" else [side]
+
+
+def _get_subject_id(subject):
+    if subject.startswith("_"):
+        return subject[1:]
+    return subject
+
+
 class RemoveVentricleFromVolume:
     """Class to remove ventricle from volume files through the automatic
     labelling graph computed by Morphologist. The default automatic labelling
@@ -221,7 +291,7 @@ class RemoveVentricleFromVolume:
     def __init__(self, src_dir, output_dir,
                  morpho_dir, path_to_graph, labelling_session,
                  src_filename, output_filename,
-                 side, bids, parallel):
+                 side, bids, parallel, transform_dir=None):
 
         self.side = side
         self.bids = bids
@@ -229,6 +299,7 @@ class RemoveVentricleFromVolume:
         self.morpho_dir = morpho_dir
         self.path_to_graph = path_to_graph
         self.labelling_session = labelling_session
+        self.transform_dir = transform_dir
         self.src_dir = join(src_dir, self.side)
         self.output_dir = join(output_dir, self.side)
         create_folder(abspath(self.output_dir))
@@ -255,14 +326,20 @@ class RemoveVentricleFromVolume:
         log.debug(f"labelled_graphs = {labelled_graph_list}")
         log.debug(f"output_file = {output_file}")
 
+        side_list = _get_side_list(self.side)
+
         try:
             if exists(src_file):
                 volume = aims.read(src_file)
-                for graph_file in labelled_graph_list:
+                for side, graph_file in zip(side_list, labelled_graph_list):
                     if exists(graph_file):
                         labelled_graph = aims.read(graph_file)
+                        transform = None
+                        if self.transform_dir is not None:
+                            transform = self.get_transform_file(
+                                subject, side, graph_file)
                         volume = remove_ventricle_from_graph(
-                            volume, labelled_graph)
+                            volume, labelled_graph, transform=transform)
                     else:
                         raise FileNotFoundError(f"Labelled graph not found : \
                                                 {graph_file}")
@@ -276,14 +353,21 @@ class RemoveVentricleFromVolume:
         except Exception as e:
             log.error(f"{subject}: {repr(e)}")
 
+    def get_transform_file(self, subject, side, graph_file):
+        """Returns the .trm path for one subject/side, matching what
+        generate_ICBM2009c_transforms wrote at self.transform_dir."""
+        subject_id = _get_subject_id(subject)
+        side_transform_dir = join(self.transform_dir, side)
+        return get_transform_filename(
+            side_transform_dir, side, subject_id, graph_file, self.bids)
+
     def get_labelled_graph(self, subject: str):
         """ Find the labelled graph in the morphologist database from the
         source filename.
         """
         labelled_graph_list = []
-        side_list = ["L", "R"] if self.side == "F" else [self.side]
-        if subject.startswith("_"):
-            subject = subject[1:]
+        side_list = _get_side_list(self.side)
+        subject = _get_subject_id(subject)
         for side in side_list:
             if self.bids:
                 split = subject.split("_")
@@ -372,7 +456,8 @@ def remove_ventricle(src_dir=_SRC_DIR_DEFAULT,
                      side=_SIDE_DEFAULT,
                      bids=False,
                      parallel=False,
-                     number_subjects=_ALL_SUBJECTS):
+                     number_subjects=_ALL_SUBJECTS,
+                     transform_dir=None):
     """Remove ventricle from a volume
     through the automatic labelled graph by Morphologist"""
 
@@ -387,7 +472,8 @@ def remove_ventricle(src_dir=_SRC_DIR_DEFAULT,
         output_filename=output_filename,
         side=side,
         bids=bids,
-        parallel=parallel)
+        parallel=parallel,
+        transform_dir=transform_dir)
     removal.compute(number_subjects=number_subjects)
 
 
