@@ -75,8 +75,23 @@ _LABELLING_SESSION_DEFAULT = "deepcnn_session_auto"
 log = set_file_logger(__file__)
 
 
+class VentricleVoxelOutOfBoundsError(IndexError):
+    """A ventricle voxel index falls outside the target volume's grid."""
+
+
+def _check_voxels_in_bounds(voxels, shape, bucket_name):
+    """Raise VentricleVoxelOutOfBoundsError if any voxel index is outside shape."""
+    if (voxels < 0).any() or (voxels >= shape).any():
+        bad = voxels[(voxels < 0).any(axis=1) | (voxels >= shape).any(axis=1)]
+        raise VentricleVoxelOutOfBoundsError(
+            f"ventricle voxel(s) outside volume grid {tuple(shape)}: "
+            f"bucket {bucket_name}, e.g. {tuple(bad[0])}"
+        )
+
+
 def remove_ventricle_from_graph(volume, labelled_graph, background=0):
     arr = np.asarray(volume)
+    shape = arr.shape[:3]
     for vertex in labelled_graph.vertices():
         label = vertex.get("label", "unknown")
         if label.startswith("ventricle"):
@@ -87,6 +102,7 @@ def remove_ventricle_from_graph(volume, labelled_graph, background=0):
                             vertex.edges()[edge][bucket_name][0].keys())
                         if voxels.shape == (0,):
                             continue
+                        _check_voxels_in_bounds(voxels, shape, bucket_name)
                         for i, j, k in voxels:
                             arr[i, j, k] = background
             for bucket_name in ('aims_bottom', 'aims_other', 'aims_ss'):
@@ -95,6 +111,7 @@ def remove_ventricle_from_graph(volume, labelled_graph, background=0):
                     voxels = np.array(bucket[0].keys())
                     if voxels.shape == (0,):
                         continue
+                    _check_voxels_in_bounds(voxels, shape, bucket_name)
                     for i, j, k in voxels:
                         arr[i, j, k] = background
     return volume
@@ -253,6 +270,9 @@ class RemoveVentricleFromVolume:
             else:
                 raise FileNotFoundError(f"Source file not found : \
                                         {src_file}")
+        except VentricleVoxelOutOfBoundsError as e:
+            log.error(f"{subject}: {repr(e)}")
+            raise VentricleVoxelOutOfBoundsError(f"subject {subject}: {e}") from e
         except Exception as e:
             log.error(f"{subject}: {repr(e)}")
 

@@ -7,6 +7,8 @@ Covers:
   both the L and the R labelled graphs.
 - REQ-FULLBRAIN-03: add_left_and_right_volumes processes every subject
   when called without number_subjects.
+- REQ-FULLBRAIN-04: remove_ventricle(side="F") raises, naming the subject,
+  when a ventricle voxel index falls outside the source volume.
 
 Requirements are tracked in champollion_pipeline's elm/REQUIREMENTS.md.
 """
@@ -16,6 +18,7 @@ import os
 from os.path import dirname, join
 
 import numpy as np
+import pytest
 from cortical_tiles.brainvisa.add_left_and_right_volumes import (
     AddLeftandRightVolumes,
     add_left_and_right_volumes,
@@ -178,3 +181,43 @@ class TestAddLeftAndRightVolumesDefaultSubjects:
 
         written = sorted(os.path.basename(p) for p in glob.glob(join(src_dir, "F", "*.nii.gz")))
         assert written == [f"Fresampled_skeleton_{s}.nii.gz" for s in subjects]
+
+
+# ---------------------------------------------------------------------------
+# REQ-FULLBRAIN-04
+# ---------------------------------------------------------------------------
+
+# Shape of the resampled (1 mm ICBM) skeleton grid that run_cortical_tiles.py
+# hands to remove_ventricle(side="F"), versus the 260x311x260 native grid the
+# graphs' bucket voxels index into.
+_RESAMPLED_SHAPE = (193, 229, 193)
+
+
+class TestRemoveVentricleGridMismatch:
+    @pytest.mark.parametrize("parallel", [False, True], ids=["serial", "parallel"])
+    def test_out_of_bounds_ventricle_voxel_raises_naming_subject(self, tmp_path, parallel):
+        ventricle_voxels = _ventricle_voxels(_graph_path("L")) | _ventricle_voxels(_graph_path("R"))
+        # Sanity: the fixture really puts ventricle voxels outside this grid.
+        assert any(
+            any(c >= s for c, s in zip(voxel, _RESAMPLED_SHAPE)) for voxel in ventricle_voxels
+        ), "fixture no longer exercises an out-of-bounds ventricle voxel"
+
+        src_dir = tmp_path / "skeletons"
+        (src_dir / "F").mkdir(parents=True)
+        _write_volume(
+            np.full(_RESAMPLED_SHAPE, 30, dtype=np.int16),
+            str(src_dir / "F" / f"Fresampled_skeleton_{_SUBJECT}.nii.gz"),
+        )
+
+        with pytest.raises(Exception) as excinfo:
+            remove_ventricle(
+                side="F",
+                src_dir=str(src_dir),
+                output_dir=str(tmp_path / "whole_brain"),
+                morpho_dir=_MORPHO_DIR,
+                path_to_graph=_PATH_TO_GRAPH,
+                labelling_session=_LABELLING_SESSION,
+                src_filename="resampled_skeleton",
+                parallel=parallel,
+            )
+        assert _SUBJECT in str(excinfo.value), f"exception message does not name subject {_SUBJECT}: {excinfo.value!r}"
