@@ -23,6 +23,16 @@ Several processings are required, as drawn here:
  
 We give a step-by-step description of the pipeline in `<cortical_tiles/brainvisa/README.rst>`_.
 
+Generates a whole-brain volume
+-------------------------------
+
+In addition to the per-region crops, two standalone scripts in ``cortical_tiles/brainvisa/`` build a single whole-brain (non-cropped) volume per subject:
+
+* ``add_left_and_right_volumes.py`` fuses the resampled left and right hemisphere skeletons into one volume (``F`` side), resolving conflicting voxels by an anatomical priority order.
+* ``remove_ventricle.py`` (called with ``--side F`` on that fused volume) then strips the ventricle, using the labelled Morphologist graph from the labelling session given by ``--labelling_session`` (default ``deepcnn_session_auto``). Its Python API also accepts a ``transform_dir`` (not exposed on the CLI) to resample native ventricle voxels onto the ICBM2009c grid before comparison.
+
+Both accept ``--parallel`` for per-subject parallelism. Consumers such as ``champollion_pipeline`` call them automatically after crop generation succeeds; see each script's own ``--help`` for the full argument list.
+
 The pixi way (recommended)
 --------------------------
 
