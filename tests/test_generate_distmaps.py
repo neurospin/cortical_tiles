@@ -1,39 +1,33 @@
 import os
+
 import numpy as np
-from soma import aims
 from cortical_tiles.brainvisa import generate_distmaps
-from cortical_tiles.brainvisa.utils.constants import _ALL_SUBJECTS
 
-distmaps_dir = 'data/test'
-
-if os.path.isdir('/neurospin/dico/data/cortical_tiles/current/datasets/hcp/skeletons/raw/'):
-    src_dir = '/neurospin/dico/data/cortical_tiles/current/datasets/hcp/skeletons/raw/'
-    tgt_dir = '/tmp/'
-    ref_dir = '/neurospin/dico/data/cortical_tiles/test/distmap'
+if os.path.isdir("/neurospin/dico/data/cortical_tiles/current/datasets/hcp/skeletons/raw/"):
+    src_dir = "/neurospin/dico/data/cortical_tiles/current/datasets/hcp/skeletons/raw/"
+    tgt_dir = "/tmp/"
+    ref_dir = "/neurospin/dico/data/cortical_tiles/test/distmap"
 else:
-    src_dir = '/nfs/neurospin/dico/data/cortical_tiles/current/datasets/hcp/skeletons/raw/'
-    tgt_dir = '/tmp/'
-    ref_dir = '/nfs/neurospin/dico/data/cortical_tiles/test/distmap'
+    src_dir = "/nfs/neurospin/dico/data/cortical_tiles/current/datasets/hcp/skeletons/raw/"
+    tgt_dir = "/tmp/"
+    ref_dir = "/nfs/neurospin/dico/data/cortical_tiles/test/distmap"
 
 
 def equal_distmaps(distmap_ref, distmap_target):
-    """Returns True if distmap1 and distmap2 are identical
-    """
+    """Returns True if distmap1 and distmap2 are identical"""
     equal_distmap = np.array_equal(distmap_ref, distmap_target)
     return equal_distmap
 
 
 def test_generate_distmaps_help():
     args = "--help"
-    argv = args.split(' ')
+    argv = args.split(" ")
     generate_distmaps.main(argv)
 
 
-def test_generate_distmaps_n_0():
+def test_generate_distmaps_n_0(tmp_path):
     """Tests the function when number of subjects is 0"""
-    generate_distmaps.generate_distmaps(
-        distmaps_dir=distmaps_dir,
-        number_subjects=0)
+    generate_distmaps.generate_distmaps(distmaps_dir=str(tmp_path), number_subjects=0)
 
 
 # def test_generate_distmaps():
