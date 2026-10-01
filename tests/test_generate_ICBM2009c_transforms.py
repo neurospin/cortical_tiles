@@ -1,16 +1,13 @@
 from cortical_tiles.brainvisa import generate_ICBM2009c_transforms
-from cortical_tiles.brainvisa.utils.constants import _ALL_SUBJECTS
 
-transform_dir = 'data/test'
 
 def test_generate_ICBM2009c_transforms_help():
     args = "--help"
-    argv = args.split(' ')
+    argv = args.split(" ")
     generate_ICBM2009c_transforms.main(argv)
 
-def test_generate_ICBM2009c_transforms_n_0():
+
+def test_generate_ICBM2009c_transforms_n_0(tmp_path):
     """Tests the function when number of subjects is 0"""
 
-    generate_ICBM2009c_transforms.generate_ICBM2009c_transforms(
-        transform_dir=transform_dir,
-        nb_subjects=0)
+    generate_ICBM2009c_transforms.generate_ICBM2009c_transforms(transform_dir=str(tmp_path), nb_subjects=0)

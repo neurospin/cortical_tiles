@@ -1,13 +1,12 @@
 from cortical_tiles.brainvisa import generate_crops
-from cortical_tiles.brainvisa.utils.constants import _ALL_SUBJECTS
 
-crop_dir = 'data/test'
 
 def test_generate_crops_help():
     args = "--help"
-    argv = args.split(' ')
+    argv = args.split(" ")
     generate_crops.main(argv)
 
-def test_generate_crops_n_0():
+
+def test_generate_crops_n_0(tmp_path):
     """Tests the function when number of subjects is 0"""
-    generate_crops.generate_crops(crop_dir=crop_dir, nb_subjects=0)
+    generate_crops.generate_crops(crop_dir=str(tmp_path), nb_subjects=0)

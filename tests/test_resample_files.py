@@ -1,25 +1,16 @@
-import os
-import glob
-
-import numpy as np
-
-from soma import aims
-
 from cortical_tiles.brainvisa import resample_files
-from cortical_tiles.brainvisa.utils.constants import _ALL_SUBJECTS
 
-resampled_dir = 'data/test'
 
 def test_resample_files_help():
     """Tests if calling help function is working"""
     args = "--help"
-    argv = args.split(' ')
+    argv = args.split(" ")
     resample_files.main(argv)
 
-def test_resample_files_n_0():
-    resample_files.resample_files(
-        resampled_dir=resampled_dir,
-        nb_subjects=0)
+
+def test_resample_files_n_0(tmp_path):
+    resample_files.resample_files(resampled_dir=str(tmp_path), nb_subjects=0)
+
 
 # def are_arrays_almost_equal(arr1, arr2, epsilon, max_number_different_pixels):
 # 	"""Returns True if arrays arr1 and arr2 are almost equal
