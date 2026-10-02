@@ -55,7 +55,7 @@ def test_bounding_box_n_1(tmp_path):
     )
 
     # Selected keys to test
-    selected_keys = ["bbmin_voxel", "bbmax_voxel", "bbmin_AIMS_Talairach", "bbmin_AIMS_Talairach"]
+    selected_keys = ["bbmin_voxel", "bbmax_voxel", "bbmin_AIMS_Talairach", "bbmax_AIMS_Talairach"]
 
     # Gets and reads the first reference json file
     ref_dir_side = str(REF_DIR / side)
@@ -73,6 +73,6 @@ def test_bounding_box_n_1(tmp_path):
     with open(tgt_file, "r") as f:
         data_target = json.load(f)
         print(json.dumps(data_target, sort_keys=True, indent=4))
-        box_target = {k: data_ref[k] for k in selected_keys}
+        box_target = {k: data_target[k] for k in selected_keys}
 
     assert box_target == box_ref
