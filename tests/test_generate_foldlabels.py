@@ -82,4 +82,4 @@ def test_generate_foldlabels_value_correspondance(tmp_path):
 
         aims.write(dtx.convert.volume_to_bucketMap_aims(np.squeeze(skeleton)), f"{tgt_dir}/skel_suppr_{mask}.bck")
 
-        equal_buckets(f"{tgt_dir}/skel_suppr_{mask}.bck", f"{data_dir}/skel_suppr_{mask}.bck")
+        assert equal_buckets(f"{tgt_dir}/skel_suppr_{mask}.bck", f"{data_dir}/skel_suppr_{mask}.bck")
