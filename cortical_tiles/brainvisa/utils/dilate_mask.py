@@ -55,6 +55,10 @@ def dilate(mask, radius=10.):
     arr = np.asarray(mask)
     # Binarization of mask
     arr[arr < 1] = 0
+    if radius == 0:
+        # AIMS cannot dilate by 0: the binarized mask is the result
+        arr[arr >= 1] = 1
+        return mask
     arr[arr >= 1] = _AIMS_BINARY_ONE
     # Dilates initial volume of 10 mm
     morpho = MorphoGreyLevel_S16()

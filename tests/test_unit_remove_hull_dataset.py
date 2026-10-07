@@ -76,11 +76,14 @@ def test_dataset_explicit_list_subjects_is_used_unchanged(crops):
     assert _dataset(crops, list_subjects=["x", "y"]).list_subjects == ["x", "y"]
 
 
-def test_dataset_zero_subjects_cannot_create_meshes(crops):
-    """REQ-CTILESTEST-76: number_subjects 0 leaves no subject list; create_meshes raises AttributeError (DEFECT)."""
+def test_dataset_zero_subjects_creates_no_mesh(crops, monkeypatch):
+    """REQ-CTDEFECTS-08 (inverts REQ-CTILESTEST-76): number_subjects 0 -> create_meshes returns {} and writes no mesh."""
+    monkeypatch.setattr(rh, "define_njobs", lambda: 1)
     dataset = _dataset(crops, number_subjects=0)
-    with pytest.raises(AttributeError):
-        dataset.create_meshes()
+
+    assert dataset.create_meshes() == {}
+    meshes = crops / "meshes"
+    assert not meshes.exists() or not list(meshes.glob("*.gii"))
 
 
 # --- REQ-CTILESTEST-77 / 78: mesh creation ----------------------------------------------------------

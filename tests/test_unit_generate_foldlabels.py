@@ -13,6 +13,7 @@ pin current behaviour that looks wrong; it is recorded, not fixed (tests-only ru
 """
 
 import csv
+import inspect
 import os
 import types
 
@@ -237,14 +238,38 @@ def test_compute_prints_summary(src, tmp_path, graph_reader, expected, capsys):
         )
 
 
-def test_compute_lists_processed_subjects_as_not_processed(src, tmp_path, graph_reader):
-    """REQ-CTILESTEST-135: not_processed_files.csv lists every non-.minf source entry, even converted ones (DEFECT)."""
+def test_compute_does_not_list_converted_subjects_as_not_processed(src, tmp_path, graph_reader):
+    """REQ-CTDEFECTS-18 (inverts REQ-CTILESTEST-135): converted subjects are absent from not_processed_files.csv."""
     (src / "s1.minf").write_text("")
+    _add_subject(src, BAD_SUBJECT)
     _converter(src, tmp_path / "labels").compute(nb_subjects=-1)
 
     assert _niftis(tmp_path / "labels" / SIDE) == [f"{SIDE}foldlabel_s1.nii.gz", f"{SIDE}foldlabel_s2.nii.gz"]
     with open(tmp_path / "labels" / "not_processed_files.csv") as handle:
-        assert sorted(row[0] for row in csv.reader(handle)) == ["s1", "s2"]
+        assert sorted(row[0] for row in csv.reader(handle)) == [BAD_SUBJECT]
+
+
+def test_compute_not_processed_csv_excludes_qc_rejected_subjects(src, tmp_path, graph_reader):
+    """REQ-CTDEFECTS-18: a subject rejected by the QC file is absent from not_processed_files.csv."""
+    _add_subject(src, BAD_SUBJECT)
+    _add_subject(src, "s9rejected")
+    qc_path = tmp_path / "qc.tsv"
+    qc_path.write_text(f"participant_id\tqc\ns1\t1\ns2\t1\n{BAD_SUBJECT}\t1\ns9rejected\t0\n")
+    conv = gf.GraphConvert2FoldLabel(
+        src_dir=str(src),
+        foldlabel_dir=str(tmp_path / "labels"),
+        side=SIDE,
+        junction="thin",
+        parallel=False,
+        path_to_graph=PATH_TO_GRAPH,
+        bids=False,
+        qc_path=str(qc_path),
+    )
+    conv.compute(nb_subjects=-1)
+
+    assert _niftis(tmp_path / "labels" / SIDE) == [f"{SIDE}foldlabel_s1.nii.gz", f"{SIDE}foldlabel_s2.nii.gz"]
+    with open(tmp_path / "labels" / "not_processed_files.csv") as handle:
+        assert sorted(row[0] for row in csv.reader(handle)) == [BAD_SUBJECT]
 
 
 def test_compute_parallel_matches_serial(src, tmp_path, graph_reader, expected):
@@ -264,7 +289,18 @@ def test_compute_parallel_matches_serial(src, tmp_path, graph_reader, expected):
 
 
 @pytest.mark.parametrize("extra", [[], ["-j", "wide", "-n", "3", "-b"]])
-def test_parse_args_raises_key_error_for_valid_arguments(tmp_path, extra):
-    """REQ-CTILESTEST-137: parse_args raises KeyError 'output_dir' on valid arguments (DEFECT: CLI unusable)."""
-    with pytest.raises(KeyError, match="output_dir"):
-        gf.parse_args(["-s", str(tmp_path), "-o", str(tmp_path / "labels"), *extra])
+def test_parse_args_returns_generate_foldlabels_keyword_arguments(tmp_path, extra):
+    """REQ-CTDEFECTS-19 (inverts REQ-CTILESTEST-137): parse_args keys == generate_foldlabels parameter names."""
+    params = gf.parse_args(["-s", str(tmp_path), "-o", str(tmp_path / "labels"), *extra])
+    assert set(params) == set(inspect.signature(gf.generate_foldlabels).parameters)
+
+
+def test_main_calls_generate_foldlabels_with_parsed_arguments(tmp_path, monkeypatch):
+    """REQ-CTDEFECTS-20: main(argv) calls generate_foldlabels once with keyword arguments == parse_args(argv)."""
+    received = []
+    monkeypatch.setattr(gf, "generate_foldlabels", lambda **kwargs: received.append(kwargs))
+    argv = ["-s", str(tmp_path), "-o", str(tmp_path / "labels"), "-j", "wide", "-n", "3", "-b", "-q", "qc.tsv"]
+
+    gf.main(argv)
+
+    assert received == [gf.parse_args(argv)]

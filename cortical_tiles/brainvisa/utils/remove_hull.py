@@ -196,6 +196,9 @@ class DatasetHullRemoved:
         elif file_subjects:
             self.list_subjects = pd.read_csv(file_subjects)
 
+        elif not number_subjects:
+            self.list_subjects = []
+
         else:
             if number_subjects:
                 # subjects are detected as the directory names under src_dir
@@ -258,6 +261,9 @@ class DatasetHullRemoved:
         # Creates target directory
         if not os.path.exists(self.tgt_dir):
             os.makedirs(self.tgt_dir)
+
+        if not len(self.list_subjects):
+            return {}
 
         # Parallelization of mesh generation
         result = pqdm(

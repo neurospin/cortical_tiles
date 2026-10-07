@@ -119,6 +119,15 @@ def test_simple_mask_keeps_first_mask_geometry(tmp_path):
     assert np.asarray(vol).dtype == np.int16
 
 
+def test_simple_mask_zero_dilation_is_thresholded_seeds(single_sulcus):
+    """REQ-CTDEFECTS-10: dilation 0 -> 1 exactly on voxels whose summed mask value > threshold, 0 elsewhere."""
+    mask_dir, seed = single_sulcus
+
+    vol, _, _ = compute_simple_mask(["S.A._right"], SIDE, mask_dir=mask_dir, dilation=0, threshold=2)
+
+    np.testing.assert_array_equal(_mask3d(vol), seed.astype(_mask3d(vol).dtype))
+
+
 def test_simple_mask_bbox_matches_returned_mask(single_sulcus):
     """REQ-CTILESTEST-11: returned bbmin/bbmax equal compute_bbox_mask of the returned mask."""
     mask_dir, _ = single_sulcus

@@ -206,7 +206,8 @@ class FoldLabelMasker:
             if os.path.isdir(self.src_dir):
                 src_files = glob.glob(f"{self.src_dir}/*.nii.gz")
                 log.debug(f"list src files = {src_files}")
-                log.debug(os.path.basename(src_files[0]))
+                if src_files:
+                    log.debug(os.path.basename(src_files[0]))
 
                 # Creates target directories
                 create_folder(self.masked_dir)
