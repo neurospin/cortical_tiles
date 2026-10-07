@@ -170,6 +170,21 @@ class RegionPipelineRunner:
                 )
 
 
+# ($local config key, argument that must replace it)
+_LOCAL_GRAPH_ARGUMENTS = (("path_to_graph", "path_to_graph"),
+                          ("path_to_skeleton_with_hull", "path_sk_with_hull"))
+
+
+def _check_local_graph_arguments(config: dict, arguments: dict) -> None:
+    """Raises ValueError if a $local graph path has no argument to replace it"""
+    for key, argument in _LOCAL_GRAPH_ARGUMENTS:
+        if config.get(key) == "$local" and not arguments[argument]:
+            raise ValueError(
+                f"{key} is '$local' in pipeline_loop_2mm.json but argument "
+                f"{argument} is empty; pass --{argument} (no default: "
+                "Morphologist graph layouts differ)")
+
+
 def generate_sulcal_regions(regions, sides, input_types,
                             path_dataset, verbose, output_dir, path_to_graph,
                             path_sk_with_hull, sk_qc_path, njobs, masks=None):
@@ -194,6 +209,10 @@ def generate_sulcal_regions(regions, sides, input_types,
         # stale values from a previous run persisting in the config
         resolved_config["skel_qc_path"] = sk_qc_path
     else:
+        _check_local_graph_arguments(
+            resolved_config,
+            {"path_to_graph": path_to_graph,
+             "path_sk_with_hull": path_sk_with_hull})
         for k, v in list(resolved_config.items()):
             if v != "$local":
                 continue
@@ -217,9 +236,9 @@ def generate_sulcal_regions(regions, sides, input_types,
                     output_dir if output_dir not in ("", None)
                     else f"derivatives/cortical_tiles-{_CORTICAL_TILES_VERSION}"
                 )
-            elif k == "path_to_graph" and path_to_graph:
+            elif k == "path_to_graph":
                 resolved_config[k] = path_to_graph
-            elif k == "path_to_skeleton_with_hull" and path_sk_with_hull:
+            elif k == "path_to_skeleton_with_hull":
                 resolved_config[k] = path_sk_with_hull
             elif k == "skel_qc_path":
                 resolved_config[k] = sk_qc_path
