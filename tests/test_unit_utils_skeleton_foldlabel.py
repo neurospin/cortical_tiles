@@ -150,13 +150,14 @@ def test_thin_foldlabel_bottom_label(graph):
 # --- REQ-CTILESTEST-18: check_if_valid_foldlabel ------------------------------------------------
 
 
-@pytest.mark.parametrize("value", [999, 1998, 7992])
-def test_foldlabel_check_rejects_nonzero_multiple_of_999(value):
-    """REQ-CTILESTEST-18: any non-zero multiple of 999 raises ValueError."""
+# REQ-CTILESTEST-18 used to pin "any non-zero multiple of 999 raises" (TASK-128 defect b:
+# 7992 is bottom label 7000 + fold 992). Inverted by REQ-CTDEFECTS128-02.
+@pytest.mark.parametrize("value", [999, 1998, 6993, 7992])
+def test_foldlabel_check_accepts_nonzero_multiple_of_999(value):
+    """REQ-CTDEFECTS128-02: a valid label that happens to be a multiple of 999 does not raise."""
     vol = aims.Volume(3, 3, 3, 1, dtype="S16")
     np.asarray(vol)[1, 1, 1, 0] = value
-    with pytest.raises(ValueError):
-        check_if_valid_foldlabel(vol)
+    assert check_if_valid_foldlabel(vol) is None
 
 
 def test_foldlabel_check_accepts_other_labels():
@@ -165,3 +166,21 @@ def test_foldlabel_check_accepts_other_labels():
     np.asarray(vol)[..., 0] = np.arange(27).reshape(3, 3, 3) + 1000
     np.asarray(vol)[0, 0, 0, 0] = 0
     assert check_if_valid_foldlabel(vol) is None
+
+
+# --- REQ-CTDEFECTS128-03: real label overflow (TASK-128 defect b) -------------------------------
+
+
+@pytest.mark.parametrize("junction", ["thin", "wide"])
+def test_foldlabel_generation_rejects_graph_over_999_vertices(junction):
+    """REQ-CTDEFECTS128-03: a graph with 1000 vertices raises ValueError (fold 1000 spills into the next label range)."""
+    g = aims.Graph("CorticalFoldArg")
+    g["voxel_size"] = [2.0, 2.0, 2.0, 1.0]
+    g["boundingbox_min"] = [0, 0, 0]
+    g["boundingbox_max"] = BBOX_MAX
+    # Bucket-less vertices: the volume stays all-zero, so only the vertex count can reveal the
+    # overflow (vertex iteration order is not insertion order, so per-vertex labels are unstable).
+    for _ in range(1000):
+        g.addVertex("fold")
+    with pytest.raises(ValueError):
+        generate_foldlabel_from_graph(g, junction=junction)

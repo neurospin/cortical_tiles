@@ -179,9 +179,17 @@ def generate_foldlabel_wide_junction(
     return vol_label
 
 
+_MAX_FOLDLABEL_VERTICES = 999
+
+
 def check_if_valid_foldlabel(vol_label: aims.Volume):
+    """Raises ValueError if a label overflowed into the next category
+
+    Labels are a category base (multiple of 1000) plus a fold or edge
+    index starting at 1, so a non-zero multiple of 1000 means index 1000.
+    """
     a = vol_label.np
-    if ((np.mod(a, 999) == 0) & (a != 0)).sum() != 0:
+    if ((np.mod(a, 1000) == 0) & (a != 0)).sum() != 0:
         raise ValueError(
             "The foldlabel is NOT valid. "
             "There are too many simple surfaces in graph. "
@@ -193,6 +201,12 @@ def generate_foldlabel_from_graph(
         graph: aims.Graph,
         junction: str = _JUNCTION_DEFAULT) -> aims.Volume:
     """Generates foldlabel from graph"""
+    if graph.order() > _MAX_FOLDLABEL_VERTICES:
+        raise ValueError(
+            "The foldlabel is NOT valid. "
+            f"The graph has {graph.order()} simple surfaces, "
+            f"more than {_MAX_FOLDLABEL_VERTICES}!!!"
+        )
     if junction == 'wide':
         vol_label = generate_foldlabel_wide_junction(graph)
     else:

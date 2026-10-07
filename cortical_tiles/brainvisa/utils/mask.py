@@ -40,11 +40,11 @@ a specified hemisphere.
 
 """
 
+import tempfile
 from os.path import join
 
 import cortical_tiles.brainvisa.utils.dilate_mask as dl
 import numpy as np
-from scipy import ndimage
 from soma import aims
 from soma.aimsalgo import MorphoGreyLevel_S16
 
@@ -61,22 +61,19 @@ _AIMS_BINARY_ONE = 32767
 
 
 def compute_bbox_mask(arr):
+    """Returns the bounding box of the non-zero voxels of arr
 
-    # Gets location of bounding box as slices
-    objects_in_image = ndimage.find_objects(arr)
-    print(f"ndimage.find_objects(arr) = {objects_in_image}")
-    if not objects_in_image:
+    For each axis, bbmin is the lowest index of a non-zero voxel and bbmax
+    is one past the highest one, whatever the non-zero values are.
+    """
+    nonzero = np.nonzero(arr)
+    if nonzero[0].size == 0:
         raise ValueError("There are only 0s in array!!!")
 
-    loc = objects_in_image[0]
-    bbmin = []
-    bbmax = []
+    bbmin = np.array([axis.min() for axis in nonzero])
+    bbmax = np.array([axis.max() + 1 for axis in nonzero])
 
-    for slicing in loc:
-        bbmin.append(slicing.start)
-        bbmax.append(slicing.stop)
-
-    return np.array(bbmin), np.array(bbmax)
+    return bbmin, bbmax
 
 
 def compute_simple_mask(
@@ -237,27 +234,38 @@ def compute_centered_mask(sulci_list, side, mask_dir=_MASK_DIR_DEFAULT):
     for sulcus in sulci_list:
         mask_file = join(mask_dir, side, sulcus + '.nii.gz')
         list_masks.append(aims.read(mask_file))
+    voxel_size = list(list_masks[0].header()['voxel_size'])[:3]
+
+    # Intermediate volumes are written to a per-call directory,
+    # removed on return
+    with tempfile.TemporaryDirectory(
+            prefix="cortical_tiles_centered_mask_") as tmp_dir:
+        return _compute_centered_mask(list_masks, hdr, voxel_size, tmp_dir)
+
+
+def _compute_centered_mask(list_masks, hdr, voxel_size, tmp_dir):
+    """Combines the masks of compute_centered_mask, writing intermediates to tmp_dir"""
 
     # Threshold and dilation of first mask
     eligible_mask_1 = np.asarray(list_masks[0])
     # should be set to 7 for 1.5mm
     eligible_mask_1[eligible_mask_1 < 10] = 0
     eligible_mask_1 = dl.dilate(list_masks[0])
-    aims.write(eligible_mask_1, '/tmp/eligible_mask_1.nii.gz')
+    aims.write(eligible_mask_1, join(tmp_dir, 'eligible_mask_1.nii.gz'))
 
     # Threshold of other mask
     eligible_mask_2 = np.asarray(list_masks[1])
     eligible_mask_2[eligible_mask_2 < 10] = 0
     eligible_mask_2[eligible_mask_2 >= 10] = 1
-    aims.write(list_masks[1], '/tmp/eligible_mask_2.nii.gz')
+    aims.write(list_masks[1], join(tmp_dir, 'eligible_mask_2.nii.gz'))
 
     # Intersection of the two eligible masks
     intersec_mask = aims.Volume(list_masks[0].shape, dtype='S16')
     intersec_mask.copyHeaderFrom(hdr)
-    intersec_mask.header()['voxel_size'] = [2., 2., 2.]
+    intersec_mask.header()['voxel_size'] = voxel_size
     intersec_mask_arr = np.asarray(intersec_mask)
     intersec_mask_arr[:] = eligible_mask_1 & eligible_mask_2
-    aims.write(intersec_mask, '/tmp/intersec_mask.nii.gz')
+    aims.write(intersec_mask, join(tmp_dir, 'intersec_mask.nii.gz'))
 
     # Dilation of intersec_mask
     morpho = MorphoGreyLevel_S16()
@@ -265,12 +273,12 @@ def compute_centered_mask(sulci_list, side, mask_dir=_MASK_DIR_DEFAULT):
     intersec_mask = morpho.doDilation(intersec_mask, 15.0)
     intersec_mask_arr = np.asarray(intersec_mask)
     intersec_mask_arr[intersec_mask_arr >= 1] = 1
-    aims.write(intersec_mask, '/tmp/intersec_mask_dilated.nii.gz')
+    aims.write(intersec_mask, join(tmp_dir, 'intersec_mask_dilated.nii.gz'))
 
     # Intersection of intersec_mask, eligible_mask_1 and eligible_mask_2
     mask_result = aims.Volume(list_masks[0].shape, dtype='S16')
     mask_result.copyHeaderFrom(hdr)
-    mask_result.header()['voxel_size'] = [2., 2., 2.]
+    mask_result.header()['voxel_size'] = voxel_size
     mask_result_arr = np.asarray(mask_result)
 
     intersec_mask_arr = np.asarray(intersec_mask)
@@ -280,7 +288,7 @@ def compute_centered_mask(sulci_list, side, mask_dir=_MASK_DIR_DEFAULT):
     mask_result_arr[:] = intersec_1 + intersec_2
     mask_result_arr[mask_result_arr > 1] = 1
 
-    aims.write(mask_result, '/tmp/mask_result.nii.gz')
+    aims.write(mask_result, join(tmp_dir, 'mask_result.nii.gz'))
 
     # Computes the mask bounding box
     bbmin, bbmax = compute_bbox_mask(mask_result_arr)
