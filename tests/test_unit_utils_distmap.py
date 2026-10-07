@@ -110,9 +110,7 @@ def test_padded_distmap_transformations_are_elementwise_products(padded):
 # --- REQ-CTILESTEST-89: generate_distmap_from_skeleton_file scratch dir ----------------------------
 
 
-def test_padded_distmap_leaves_scratch_directory(padded):
-    """REQ-CTILESTEST-89: the mkdtemp scratch dir holding skel_new_dim.nii.gz is not removed (DEFECT: leak)."""
+def test_padded_distmap_removes_scratch_directory(padded):
+    """REQ-CTDEFECTS-11 (inverts REQ-CTILESTEST-89): the mkdtemp scratch dir no longer exists after the call."""
     _, _, scratch = padded
-    leftovers = os.listdir(scratch)
-    assert len(leftovers) == 1
-    assert "skel_new_dim.nii.gz" in os.listdir(scratch / leftovers[0])
+    assert os.listdir(scratch) == []

@@ -96,15 +96,13 @@ def get_sulci_list(
             f"Side argument with an inadequate value. "
             f"Should be in 'R' or 'L', but is {side}")
 
-    try:
-        full_name = region_name + side_full
-        sulci_list = list(brain_regions['brain'][full_name].keys())
-        for i, sulcus in enumerate(sulci_list):
-            sulci_list[i] = sulcus.replace(side_full, '')
-    except ValueError:
-        print(
+    full_name = region_name + side_full
+    if full_name not in brain_regions['brain']:
+        raise ValueError(
             f"The given region {region_name} "
             f"is not in the dictionary at {json_path}")
+    sulci_list = [sulcus.replace(side_full, '')
+                  for sulcus in brain_regions['brain'][full_name].keys()]
 
     return sulci_list
 
@@ -662,7 +660,7 @@ def run_with_params(params: dict):
         resampled_dir = os.path.join(params['skeleton_dir'], vox_size)
 
     if params['out_voxel_size'] == 'raw':
-        src_dir = raw_input + 'raw'
+        src_dir = os.path.join(raw_input, 'raw')
     else:
         src_dir = resampled_dir
 
@@ -731,7 +729,7 @@ def run_with_params(params: dict):
                 log_string="Distbottoms",
                 save_behavior=save_behavior):
             if save_behavior == 'clear_and_compute' and os.path.exists(
-                    path_to_crops_complete):
+                    path_to_distbottom_complete):
                 # remove the target folder
                 log.info(f"Delete {path_to_distbottom_complete}")
                 shutil.rmtree(path_to_distbottom_complete)

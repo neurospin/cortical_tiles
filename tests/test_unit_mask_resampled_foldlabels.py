@@ -199,12 +199,11 @@ def test_compute_missing_source_dir_raises(tmp_path):
         masker.compute()
 
 
-def test_compute_empty_source_dir_raises_index_error(tree):
-    """REQ-CTILESTEST-123: <src>/<side>_before_masking without .nii.gz -> IndexError (DEFECT: no explicit error)."""
+def test_compute_empty_source_dir_returns_without_error(tree):
+    """REQ-CTDEFECTS-17 (inverts REQ-CTILESTEST-123): <src>/<side>_before_masking without .nii.gz -> no exception."""
     for path in (tree["src"] / f"{SIDE}_before_masking").iterdir():
         path.unlink()
-    with pytest.raises(IndexError):
-        _masker(tree).compute()
+    _masker(tree).compute()
 
 
 def test_compute_zero_subjects_does_nothing(tree):

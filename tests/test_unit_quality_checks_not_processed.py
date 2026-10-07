@@ -33,11 +33,9 @@ def test_not_processed_paths_are_source_files_for_neutral_dir(tmp_path):
     assert sorted(result) == sorted(str(src / f"R{SRC_FILENAME}{s}.nii.gz") for s in ("s1", "s2"))
 
 
-def test_not_processed_paths_cut_at_prefix_in_parent_dir(tmp_path):
-    """REQ-CTILESTEST-138: a parent dir containing src_filename -> paths rebuilt from the text before it (DEFECT)."""
+def test_not_processed_paths_are_source_files_when_parent_dir_contains_prefix(tmp_path):
+    """REQ-CTDEFECTS-09 (inverts REQ-CTILESTEST-138): a parent dir containing src_filename -> actual source paths."""
     src, tgt = _source_dir(tmp_path, f"my{SRC_FILENAME}data")
     result = get_not_processed_files(str(src), str(tgt), SRC_FILENAME)
 
-    root = str(tmp_path / "my")
-    assert sorted(result) == [f"{root}{SRC_FILENAME}s1.nii.gz", f"{root}{SRC_FILENAME}s2.nii.gz"]
-    assert not any((src / f"R{SRC_FILENAME}{s}.nii.gz").as_posix() in result for s in ("s1", "s2"))
+    assert sorted(result) == sorted(str(src / f"R{SRC_FILENAME}{s}.nii.gz") for s in ("s1", "s2"))

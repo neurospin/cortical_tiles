@@ -184,19 +184,18 @@ def test_get_one_numpy_array_returns_basename_id(crops):
 # --- REQ-CTILESTEST-96: save_to_pickle -------------------------------------------------------------
 
 
-def test_save_to_pickle_keys_columns_by_full_path(crops, tmp_path):
-    """REQ-CTILESTEST-96: one column per crop, keyed by the crop's full path before '_cropped_' (DEFECT)."""
+def test_save_to_pickle_keys_columns_by_subject_id(crops, tmp_path):
+    """REQ-CTDEFECTS-13 (inverts REQ-CTILESTEST-96): one column per crop, keyed by the basename before '_cropped_'."""
     crop_dir, arrays = crops
     (crop_dir / "notes.txt").write_text("not a crop")
 
     sd.save_to_pickle(str(crop_dir), str(tmp_path), "Rskeleton")
 
     frame = pd.read_pickle(tmp_path / "Rskeleton.pkl")
-    expected_keys = {os.path.join(str(crop_dir), subject) for subject in SUBJECTS}
-    assert set(frame.columns) == expected_keys
+    assert set(frame.columns) == set(SUBJECTS)
     assert frame.shape == (1, len(SUBJECTS))
     for subject in SUBJECTS:
-        np.testing.assert_array_equal(frame[os.path.join(str(crop_dir), subject)][0], arrays[subject])
+        np.testing.assert_array_equal(frame[subject][0], arrays[subject])
 
 
 # --- REQ-CTILESTEST-97: save_to_dataframe_format_from_list -----------------------------------------
@@ -218,8 +217,8 @@ def test_save_to_dataframe_format_from_list(tmp_path):
 # --- REQ-CTILESTEST-98: parallel comparison after a failed parallel comparison ---------------------
 
 
-def test_parallel_compare_after_failure_uses_stale_crop_list(crops, tmp_path, fresh_process_pool):
-    """REQ-CTILESTEST-98: after a failed parallel call, crop names of that call are reused (DEFECT: stale global)."""
+def test_parallel_compare_after_failure_uses_current_crop_list(crops, tmp_path, fresh_process_pool):
+    """REQ-CTDEFECTS-12 (inverts REQ-CTILESTEST-98): after a failed parallel call, the next call reads its own dir."""
     crop_dir, arrays = crops
     arr = _stack(arrays, SUBJECTS)
     with pytest.raises(ValueError, match="not in cropped files"):
@@ -231,5 +230,6 @@ def test_parallel_compare_after_failure_uses_stale_crop_list(crops, tmp_path, fr
         _write_crop(other_dir / f"{subject}_cropped_skeleton.nii.gz", arrays[subject])
     _write_crop(other_dir / "s2_cropped_foldlabel.nii.gz", arrays["s2"])
 
-    # A fresh pool raises "several crops are matched" here (REQ-CTILESTEST-92); the reused pool does not.
-    assert sd.compare_array_aims_files(_subjects(SUBJECTS), arr, str(other_dir), parallel=True) is None
+    # other_dir holds two s2 crops: matching against other_dir's own files raises (as REQ-CTILESTEST-92).
+    with pytest.raises(ValueError, match="several crops are matched"):
+        sd.compare_array_aims_files(_subjects(SUBJECTS), arr, str(other_dir), parallel=True)

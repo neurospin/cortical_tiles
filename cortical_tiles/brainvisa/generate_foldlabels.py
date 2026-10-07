@@ -157,13 +157,10 @@ def parse_args(argv):
     params['side'] = args.side
     params['junction'] = args.junction
     params['parallel'] = args.parallel
+    params['bids'] = args.bids
+    params['qc_path'] = args.qc_path
     # Checks if nb_subjects is either the string "all" or a positive integer
     params['nb_subjects'] = get_number_subjects(args.nb_subjects)
-
-    # Removes renamed params
-    # So that we can use params dictionary directly as function arguments
-    params.pop('output_dir')
-    params.pop('verbose')
 
     return params
 
@@ -246,11 +243,11 @@ class GraphConvert2FoldLabel:
         list_subjects = [basename(filename) for filename in filenames
                          if is_it_a_subject(filename)]
         log.info(f"Number of subjects before qc = {len(list_subjects)}")
-        list_subjects = select_good_qc(list_subjects, self.qc_path)
+        qc_subjects = select_good_qc(list_subjects, self.qc_path)
         not_processed_subjects = get_not_processed_subjects(
-            list_subjects, self.foldlabel_dir, "foldlabel_")
+            qc_subjects, self.foldlabel_dir, "foldlabel_")
 
-        list_subjects = select_subjects_int(list_subjects,
+        list_subjects = select_subjects_int(qc_subjects,
                                             not_processed_subjects,
                                             nb_subjects)
 
@@ -289,10 +286,8 @@ class GraphConvert2FoldLabel:
         # Checks if there is the expected number of generated files
         compare_number_aims_files_with_expected(self.foldlabel_dir,
                                                 list_subjects)
-        list_subjects = [basename(filename) for filename in filenames
-                         if not re.search('.minf$', filename)]
-        not_processed_subjects = \
-            get_not_processed_subjects(list_subjects, self.foldlabel_dir)
+        not_processed_subjects = get_not_processed_subjects(
+            qc_subjects, self.foldlabel_dir, "foldlabel_")
         save_list_to_csv(not_processed_subjects,
                          f"{self.foldlabel_dir}/../not_processed_files.csv")
 
@@ -331,16 +326,7 @@ def main(argv):
     params = parse_args(argv)
 
     # Actual API
-    generate_foldlabels(
-        src_dir=params['src_dir'],
-        foldlabel_dir=params['foldlabel_dir'],
-        path_to_graph=params['path_to_graph'],
-        side=params['side'],
-        junction=params['junction'],
-        bids=params['bids'],
-        parallel=params['parallel'],
-        nb_subjects=params['nb_subjects'],
-        qc_path=params['quality_checks'])
+    generate_foldlabels(**params)
 
 
 if __name__ == '__main__':
