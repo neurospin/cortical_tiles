@@ -53,9 +53,16 @@ def generate_distmap_from_skeleton_file(skeleton_file: str,
     Distmaps files are padded to avoid 0-background close to skeleton voxels
     when going to ICBMc referential.
     /!\\ skeleton files have various dimensions"""
-    # temporary directory
-    temp_dir = tempfile.mkdtemp()
+    # temporary directory, removed with the padded skeleton on return
+    with tempfile.TemporaryDirectory() as temp_dir:
+        _generate_distmap_from_skeleton_file(
+            skeleton_file, distmap_file, temp_dir)
 
+
+def _generate_distmap_from_skeleton_file(skeleton_file: str,
+                                         distmap_file: str,
+                                         temp_dir: str):
+    """Body of generate_distmap_from_skeleton_file, padding in temp_dir"""
     # 200 voxels will be added in each dimension
     dim_padd = (200, 200, 200)
     nb_vox = dim_padd[0] / 2

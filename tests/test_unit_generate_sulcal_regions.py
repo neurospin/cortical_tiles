@@ -211,18 +211,20 @@ def test_local_graphs_dir(gsr, calls, local_cwd):
 
 
 @pytest.mark.parametrize("output_dir", ["out", "/abs/out"])
-def test_local_output_dir_ignores_given_output_dir(gsr, calls, local_cwd, output_dir):
-    """REQ-CTILESTEST-111: $local output_dir, output_dir given -> <dataset>/derivatives/cortical_tiles-2026 (DEFECT)."""
+def test_local_output_dir_uses_given_output_dir(gsr, calls, local_cwd, output_dir):
+    """REQ-CTDEFECTS-14 (inverts REQ-CTILESTEST-111): $local output_dir, output_dir given -> join(dataset, output_dir)."""
     dataset = _local_config(local_cwd)
     _run(gsr, dataset, output_dir=output_dir)
-    assert calls[0]["output_dir"] == os.path.join(str(dataset), "derivatives/cortical_tiles-2026")
+    assert calls[0]["output_dir"] == os.path.join(str(dataset), output_dir)
 
 
-def test_local_output_dir_none_raises_type_error(gsr, calls, local_cwd):
-    """REQ-CTILESTEST-112: $local output_dir with output_dir None -> TypeError (DEFECT: inverted condition)."""
-    with pytest.raises(TypeError):
-        _run(gsr, _local_config(local_cwd), output_dir=None)
-    assert calls == []
+@pytest.mark.parametrize("output_dir", [None, ""])
+def test_local_output_dir_defaults_to_derivatives_when_not_given(gsr, calls, local_cwd, output_dir):
+    """REQ-CTDEFECTS-15 (inverts REQ-CTILESTEST-112): $local output_dir, None/'' -> <dataset>/derivatives/cortical_tiles-<v>."""
+    dataset = _local_config(local_cwd)
+    _run(gsr, dataset, output_dir=output_dir)
+    expected = os.path.join(str(dataset), f"derivatives/cortical_tiles-{gsr._CORTICAL_TILES_VERSION}")
+    assert calls[0]["output_dir"] == expected
 
 
 def test_local_graph_paths_and_qc_path(gsr, calls, local_cwd):

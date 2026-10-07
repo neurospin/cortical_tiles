@@ -67,7 +67,7 @@ def save_to_pickle(
         if is_file_nii(file_nii):
             aimsvol = aims.read(file_nii)
             sample = np.asarray(aimsvol)
-            subject = re.search('(.*)_cropped_(.*)', file_nii).group(1)
+            subject = re.search('(.*)_cropped_(.*)', filename).group(1)
             data_dict[subject] = [sample]
 
     dataframe = pd.DataFrame.from_dict(data_dict)
@@ -124,6 +124,21 @@ def compare_one_array(row, cropped_dir):
     return arr_ref
 
 
+def _crop_file_for_subject(sub, list_basename, cropped_dir):
+    """Returns the crop file of subject sub among list_basename"""
+    index_sub = [idx for idx, x in enumerate(list_basename) if x.startswith(f"{str(sub)}_cropped")]
+    if len(index_sub) > 1:
+        raise ValueError(f"Subject {sub}: several crops are matched to definition")
+    if not index_sub:
+        raise ValueError(f"Subject {sub} not in cropped files")
+    return f"{cropped_dir}/{list_basename[index_sub[0]]}"
+
+
+def _read_crop_array(subject_file):
+    """Reads one crop file as a numpy array"""
+    return np.asarray(aims.read(subject_file))
+
+
 def compare_array_aims_files(subjects, arr, cropped_dir, parallel=False):
     """Compares numpy arrays to subject nifti files"""
     
@@ -140,14 +155,17 @@ def compare_array_aims_files(subjects, arr, cropped_dir, parallel=False):
         list_basename = [os.path.basename(f) for f in list_nifti]
         log.info(f"list_basename[:3] = {list_basename[:3]}")
         
-        # Defines partial function
-        partial_func = partial(compare_one_array, cropped_dir=cropped_dir)
         log.info(f"cropped_dir = {cropped_dir}")
         list_subjects = subjects['Subject'].to_list()
         log.info(f"enum subjects[:3] = {list_subjects[:3]}")
-        
+
+        # Matches subjects to crop files in this process, so workers
+        # never read the module-level list_basename
+        files = [_crop_file_for_subject(sub, list_basename, cropped_dir)
+                 for sub in list_subjects]
+
         # Reads all volumes as numpy arrays
-        list_arr = p_map(partial_func, list_subjects)
+        list_arr = p_map(_read_crop_array, files)
         
         # Compares with reference numpy array
         for index, arr_ref in enumerate(list_arr):

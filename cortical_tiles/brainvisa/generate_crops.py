@@ -314,6 +314,8 @@ class CropGenerator:
                 files = glob.glob(f"{self.src_dir}/*.nii.gz")
                 log.debug(f"Nifti files in {self.src_dir} = {files}")
                 log.debug(f"Regular expresson is: {self.expr}")
+                if not files:
+                    raise ValueError(f"no nifti files in {self.src_dir}")
 
                 # Creates target directories
                 create_folder(self.crop_dir)
@@ -324,15 +326,12 @@ class CropGenerator:
                     self.src_dir,
                     self.cropped_samples_dir)
 
-                if len(files):
-                    list_not_processed_subjects = [
-                        re.search(self.expr, basename(dI))[1]
-                        for dI in not_processed_files]
-                    list_all_subjects = [
-                        re.search(self.expr, basename(dI))[1]
-                        for dI in files]
-                else:
-                    raise ValueError(f"no nifti files in {self.src_dir}")
+                list_not_processed_subjects = [
+                    re.search(self.expr, basename(dI))[1]
+                    for dI in not_processed_files]
+                list_all_subjects = [
+                    re.search(self.expr, basename(dI))[1]
+                    for dI in files]
             else:
                 raise NotADirectoryError(
                     f"{self.src_dir} doesn't exist or is not a directory")

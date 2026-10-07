@@ -131,10 +131,12 @@ def test_get_sulci_list_rejects_unknown_side(regions_json, side):
         gosr.get_sulci_list(REGION, side, json_path=regions_json)
 
 
-def test_get_sulci_list_unknown_region_raises_key_error(regions_json):
-    """REQ-CTILESTEST-29: unknown region -> KeyError (DEFECT: its `except ValueError` handler is dead)."""
-    with pytest.raises(KeyError):
+def test_get_sulci_list_unknown_region_raises_value_error_naming_region_and_json(regions_json):
+    """REQ-CTDEFECTS-03 (inverts REQ-CTILESTEST-29): unknown region -> ValueError naming region and json_path."""
+    with pytest.raises(ValueError) as excinfo:
         gosr.get_sulci_list("Not.A.Region.", "R", json_path=regions_json)
+    assert "Not.A.Region." in str(excinfo.value)
+    assert regions_json in str(excinfo.value)
 
 
 # --- REQ-CTILESTEST-30 / 31: is_step_to_be_computed -------------------------------------------------
@@ -211,13 +213,13 @@ def test_run_with_params_raw_skips_transform_and_resampling(tmp_path, regions_js
     assert "generate_crops" in names
 
 
-def test_run_with_params_raw_crop_source_dir_lacks_separator(tmp_path, regions_json, calls):
-    """REQ-CTILESTEST-35: 'raw' skeleton crops read <output_dir>/skeletonsraw (DEFECT: missing '/')."""
+def test_run_with_params_raw_crop_source_dir_is_raw_subdir(tmp_path, regions_json, calls):
+    """REQ-CTDEFECTS-01 (inverts REQ-CTILESTEST-35): 'raw' skeleton crops read <output_dir>/skeletons/raw."""
     params = _params(tmp_path, regions_json, out_voxel_size="raw")
     gosr.run_with_params(params)
 
     (crops,) = _called(calls, "generate_crops")
-    assert crops["src_dir"] == os.path.join(params["output_dir"], "skeletons") + "raw"
+    assert crops["src_dir"] == os.path.join(params["output_dir"], "skeletons", "raw")
 
 
 # --- REQ-CTILESTEST-36: mask generation only for missing masks --------------------------------------
@@ -311,11 +313,10 @@ def test_run_with_params_writes_params_json_next_to_crops(tmp_path, regions_json
 # --- REQ-CTILESTEST-40: clear_and_compute and the distbottom directory ------------------------------
 
 
-def test_run_with_params_clear_and_compute_without_distbottom_dir_raises(tmp_path, regions_json, calls):
-    """REQ-CTILESTEST-40: clear_and_compute + no <crop_dir>/Rdistbottom -> FileNotFoundError (DEFECT)."""
-    with pytest.raises(FileNotFoundError):
-        gosr.run_with_params(_params(tmp_path, regions_json, save_behavior="clear_and_compute"))
+def test_run_with_params_clear_and_compute_without_distbottom_dir_computes_distbottom(tmp_path, regions_json, calls):
+    """REQ-CTDEFECTS-02 (inverts REQ-CTILESTEST-40): clear_and_compute + no <crop_dir>/Rdistbottom -> distbottom computed."""
+    gosr.run_with_params(_params(tmp_path, regions_json, save_behavior="clear_and_compute"))
 
     names = [name for name, _ in calls]
     assert "generate_crops" in names
-    assert "generate_distbottom_crops" not in names
+    assert "generate_distbottom_crops" in names

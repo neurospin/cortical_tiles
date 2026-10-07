@@ -124,19 +124,22 @@ def get_not_processed_files(src_dir, tgt_dir, src_filename):
     else:
         tgt_subjects = []
 
-    src_subjects = [subject.split(src_filename)[-1] for subject in src_files]
-    log.info("src subjects before . split: " + src_subjects[0])
-    src_subjects = [subject.split(".")[0] for subject in src_subjects]
-    log.info("Src subjects after . split: " + src_subjects[0])
+    if not src_files:
+        return []
+
+    # Subjects are read from the file names only, so a parent directory
+    # containing src_filename does not alter them
+    src_by_subject = {
+        os.path.basename(f).split(src_filename)[-1].split(".")[0]: f
+        for f in src_files}
+    src_subjects = list(src_by_subject)
+    log.info("first src subject: " + src_subjects[0])
 
     not_processed_subjects = list(set(src_subjects) - set(tgt_subjects))
 
-    root = src_files[0].split(src_filename)[0]
     log.info("src_filename: " + src_filename)
-    log.info("root: " + root)
     not_processed_files = [
-        f"{root}{src_filename}{subject}.nii.gz"
-        for subject in not_processed_subjects]
+        src_by_subject[subject] for subject in not_processed_subjects]
     log.info(f"number of not processed subjects = {len(not_processed_files)}")
     if len(not_processed_files):
         log.info(f"first not_processed file = {not_processed_files[0]}")

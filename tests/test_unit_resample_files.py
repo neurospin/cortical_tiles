@@ -12,6 +12,7 @@ pin current behaviour that looks wrong; it is recorded, not fixed (tests-only ru
 """
 
 import csv
+import inspect
 import os
 
 import numpy as np
@@ -122,8 +123,6 @@ def test_resampler_file_naming(resamplers, input_type, out_subdir):
     [
         ("skeleton", "skeleton_generated_", "resampled_skeleton_"),
         ("foldlabel", "foldlabel_", "resampled_foldlabel_"),
-        # DEFECT: extremities fall back to the foldlabel output name, not "resampled_extremities_".
-        ("extremities", "extremities_", "resampled_foldlabel_"),
     ],
 )
 def test_resample_files_none_filenames_fall_back_per_input_type(resamplers, input_type, src_name, out_name):
@@ -133,6 +132,15 @@ def test_resample_files_none_filenames_fall_back_per_input_type(resamplers, inpu
 
     assert os.path.basename(resampler.src_file % subject) == f"R{src_name}sub.nii.gz"
     assert os.path.basename(resampler.resampled_file % subject) == f"R{out_name}sub.nii.gz"
+
+
+def test_resample_files_extremities_none_filenames_fall_back_to_extremities_names(resamplers):
+    """REQ-CTDEFECTS-05 (inverts the extremities case of REQ-CTILESTEST-43): output <side>resampled_extremities_<subject>."""
+    resampler = _build(resamplers, "extremities", src_filename=None, output_filename=None)
+    subject = {"subject": "sub", "side": SIDE}
+
+    assert os.path.basename(resampler.src_file % subject) == "Rextremities_sub.nii.gz"
+    assert os.path.basename(resampler.resampled_file % subject) == "Rresampled_extremities_sub.nii.gz"
 
 
 # --- REQ-CTILESTEST-44: foldlabel resampling output -------------------------------------------------
@@ -199,13 +207,12 @@ def test_missing_side_source_dir_raises_not_a_directory(tmp_path):
         )
 
 
-def test_empty_side_source_dir_raises_index_error(tmp_path):
-    """REQ-CTILESTEST-48: <src_dir>/<side> without .nii.gz -> IndexError (DEFECT: no explicit error)."""
+def test_empty_side_source_dir_returns_without_error(tmp_path):
+    """REQ-CTDEFECTS-06 (inverts REQ-CTILESTEST-48): <src_dir>/<side> without .nii.gz -> returns, no exception."""
     (tmp_path / "raw" / SIDE).mkdir(parents=True)
-    with pytest.raises(IndexError):
-        rf.resample_files(
-            src_dir=str(tmp_path / "raw"), input_type="foldlabel", resampled_dir=str(tmp_path / "out"), side=SIDE
-        )
+    rf.resample_files(
+        src_dir=str(tmp_path / "raw"), input_type="foldlabel", resampled_dir=str(tmp_path / "out"), side=SIDE
+    )
 
 
 def test_wrapper_raises_file_not_found_for_missing_source(foldlabel_tree):
@@ -230,7 +237,10 @@ def test_wrapper_raises_file_not_found_for_missing_source(foldlabel_tree):
 
 
 @pytest.mark.parametrize("extra", [[], ["-y", "foldlabel", "-n", "3"]])
-def test_parse_args_raises_key_error_for_valid_arguments(tmp_path, extra):
-    """REQ-CTILESTEST-50: parse_args raises KeyError 'output_dir' on valid arguments (DEFECT: CLI unusable)."""
-    with pytest.raises(KeyError, match="output_dir"):
-        rf.parse_args(["-o", str(tmp_path / "out"), *extra])
+def test_parse_args_returns_resample_files_keyword_arguments(tmp_path, extra):
+    """REQ-CTDEFECTS-04 (inverts REQ-CTILESTEST-50): keys == resample_files parameters; resampled_dir = -o value."""
+    out = str(tmp_path / "out")
+    params = rf.parse_args(["-o", out, *extra])
+
+    assert set(params) == set(inspect.signature(rf.resample_files).parameters)
+    assert params["resampled_dir"] == out

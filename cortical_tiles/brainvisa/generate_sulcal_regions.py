@@ -214,8 +214,8 @@ def generate_sulcal_regions(regions, sides, input_types,
             elif k == "output_dir":
                 resolved_config[k] = join(
                     path_dataset,
-                    f"derivatives/cortical_tiles-{_CORTICAL_TILES_VERSION}"
-                    if output_dir not in ("", None) else output_dir
+                    output_dir if output_dir not in ("", None)
+                    else f"derivatives/cortical_tiles-{_CORTICAL_TILES_VERSION}"
                 )
             elif k == "path_to_graph" and path_to_graph:
                 resolved_config[k] = path_to_graph

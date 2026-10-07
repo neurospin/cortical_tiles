@@ -178,12 +178,12 @@ def test_crop_files_missing_source_dir_raises_not_a_directory(tmp_path):
         gen.crop_files(nb_subjects=-1)
 
 
-def test_crop_files_without_nifti_raises_index_error(tmp_path):
-    """REQ-CTILESTEST-59: <src_dir>/<side> without .nii.gz -> IndexError (DEFECT: its ValueError is unreachable)."""
+def test_crop_files_without_nifti_raises_value_error(tmp_path):
+    """REQ-CTDEFECTS-07 (inverts REQ-CTILESTEST-59): <src_dir>/<side> without .nii.gz -> ValueError 'no nifti files'."""
     (tmp_path / "skel" / SIDE).mkdir(parents=True)
     (tmp_path / "skel" / SIDE / "readme.txt").write_text("")
     gen = gc.SkeletonCropGenerator(src_dir=str(tmp_path / "skel"), crop_dir=str(tmp_path / "crops"), side=SIDE)
-    with pytest.raises(IndexError):
+    with pytest.raises(ValueError, match="no nifti files"):
         gen.crop_files(nb_subjects=-1)
 
 

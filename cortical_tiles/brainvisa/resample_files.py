@@ -392,7 +392,8 @@ class FileResampler:
             if os.path.isdir(self.src_dir):
                 src_files = glob.glob(f"{self.src_dir}/*.nii.gz")
                 log.debug(f"list src files = {src_files}")
-                log.debug(os.path.basename(src_files[0]))
+                if src_files:
+                    log.debug(os.path.basename(src_files[0]))
 
                 # Creates target directories
                 create_folder(self.resampled_dir)
@@ -786,11 +787,6 @@ def parse_args(argv):
     params['src_filename'] = args.src_filename
     params['output_filename'] = args.output_filename
 
-    # Removes renamed params
-    # So that we can use params dictionary directly as function arguments
-    params.pop('output_dir')
-    params.pop('verbose')
-
     return params
 
 
@@ -846,7 +842,7 @@ def resample_files(
         src_filename = (_EXTREMITIES_FILENAME
                         if src_filename is None
                         else src_filename)
-        output_filename = (_RESAMPLED_FOLDLABEL_FILENAME
+        output_filename = (_RESAMPLED_EXTREMITIES_FILENAME
                            if output_filename is None
                            else output_filename)
         resampler = ExtremitiesResampler(
