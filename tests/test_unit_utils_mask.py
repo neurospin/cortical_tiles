@@ -71,6 +71,35 @@ def test_bbox_mask_rejects_all_zero_array():
         compute_bbox_mask(np.zeros((4, 4, 4, 1), dtype=np.int16))
 
 
+# --- REQ-CTDEFECTS128-01: compute_bbox_mask on non-binary input (TASK-128 defect a) ----------
+
+
+def test_bbox_mask_covers_every_nonzero_value():
+    """REQ-CTDEFECTS128-01: the box spans all non-zero voxels whatever their value, not only the 1s."""
+    arr = np.zeros((10, 11, 12, 1), dtype=np.int16)
+    arr[4, 4, 4, 0] = 1
+    arr[1, 6, 9, 0] = 3
+    arr[8, 2, 5, 0] = 7
+    arr[5, 9, 11, 0] = -2
+
+    bbmin, bbmax = compute_bbox_mask(arr)
+
+    np.testing.assert_array_equal(bbmin, [1, 2, 4, 0])
+    np.testing.assert_array_equal(bbmax, [9, 10, 12, 1])
+
+
+def test_bbox_mask_handles_array_without_any_value_one():
+    """REQ-CTDEFECTS128-01: an array whose non-zero values are all != 1 still gets its full box."""
+    arr = np.zeros((6, 7, 8, 1), dtype=np.int16)
+    arr[1, 2, 3, 0] = 12
+    arr[4, 5, 6, 0] = 20
+
+    bbmin, bbmax = compute_bbox_mask(arr)
+
+    np.testing.assert_array_equal(bbmin, [1, 2, 3, 0])
+    np.testing.assert_array_equal(bbmax, [5, 6, 7, 1])
+
+
 # --- REQ-CTILESTEST-09..11: compute_simple_mask -----------------------------------------------
 
 

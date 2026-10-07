@@ -5,8 +5,10 @@ compute_centered_mask) and utils.bbox.compute_max_box (REQ-CTILESTEST-148..153).
 ``compute_intersection_mask`` (cropping_type 'mask_intersect'), ``compute_centered_mask``
 (cropping_type 'mask' with combine_type, set for region CINGULATE.) and ``compute_max_box``
 (cropping_type 'bbox'). Inputs are tiny synthetic masks / json files in a pytest tmp dir.
-``compute_centered_mask`` writes fixed /tmp files (TASK-128 defect d); ``aims.write`` is
-replaced by a recorder during those calls so nothing outside tmp_path is written.
+``compute_centered_mask`` used to write fixed /tmp files and hardcode 2 mm (TASK-128 defect d,
+pinned by REQ-CTILESTEST-149/150); those pins are inverted by REQ-CTDEFECTS128-04/05. During
+those calls ``aims.write`` is replaced by a recorder that forwards a write only when its
+target directory is not ``/tmp`` itself, so the fixed-path defect never pollutes /tmp.
 """
 
 import json
@@ -69,31 +71,59 @@ def test_single_sulcus_intersection_drops_voxels_at_or_below_threshold(mask_dir)
 # --- REQ-CTILESTEST-149..151: compute_centered_mask ----------------------------------------------
 
 
-@pytest.fixture
-def centered(mask_dir, monkeypatch):
+def _run_centered(mask_dir, monkeypatch):
+    """Calls compute_centered_mask(A, B); returns (result, list of paths passed to aims.write)."""
+    real_write = mk.aims.write
     written = []
-    monkeypatch.setattr(mk.aims, "write", lambda obj, path, *args, **kwargs: written.append(path))
-    result = mk.compute_centered_mask(["A", "B"], SIDE, mask_dir=mask_dir)
-    monkeypatch.undo()
+
+    def recorder(obj, path, *args, **kwargs):
+        written.append(path)
+        if os.path.dirname(os.path.abspath(path)) != "/tmp":
+            real_write(obj, path, *args, **kwargs)
+
+    monkeypatch.setattr(mk.aims, "write", recorder)
+    try:
+        result = mk.compute_centered_mask(["A", "B"], SIDE, mask_dir=mask_dir)
+    finally:
+        monkeypatch.undo()
     return result, written
 
 
-def test_centered_mask_writes_intermediates_to_fixed_tmp_paths(centered):
-    """REQ-CTILESTEST-149 (DEFECT): intermediate/final volumes are written to five fixed /tmp paths."""
-    _, written = centered
-    assert written == [
-        "/tmp/eligible_mask_1.nii.gz",
-        "/tmp/eligible_mask_2.nii.gz",
-        "/tmp/intersec_mask.nii.gz",
-        "/tmp/intersec_mask_dilated.nii.gz",
-        "/tmp/mask_result.nii.gz",
-    ]
+@pytest.fixture
+def centered(mask_dir, monkeypatch):
+    return _run_centered(mask_dir, monkeypatch)
 
 
-def test_centered_mask_voxel_size_is_hardcoded_2mm(centered):
-    """REQ-CTILESTEST-150 (DEFECT): returned mask has voxel_size 2 mm although the inputs are 1 mm."""
-    (mask, _, _), _ = centered
-    assert list(mask.header()["voxel_size"])[:3] == [2.0, 2.0, 2.0]
+# REQ-CTILESTEST-149 used to pin the five fixed /tmp paths (TASK-128 defect d). Inverted by
+# REQ-CTDEFECTS128-04.
+def test_centered_mask_writes_only_to_removed_per_call_temp_dir(mask_dir, monkeypatch):
+    """REQ-CTDEFECTS128-04: every write lands in a call-specific temp dir that is gone on return."""
+    _, written_1 = _run_centered(mask_dir, monkeypatch)
+    _, written_2 = _run_centered(mask_dir, monkeypatch)
+
+    dirs_1 = {os.path.dirname(os.path.abspath(p)) for p in written_1}
+    dirs_2 = {os.path.dirname(os.path.abspath(p)) for p in written_2}
+    for d in dirs_1 | dirs_2:
+        assert not os.path.exists(d), f"{d} still exists after compute_centered_mask returned"
+    assert dirs_1.isdisjoint(dirs_2), f"two calls shared a write directory: {dirs_1 & dirs_2}"
+
+
+# REQ-CTILESTEST-150 used to pin a hardcoded 2 mm voxel_size (TASK-128 defect d). Inverted by
+# REQ-CTDEFECTS128-05.
+@pytest.mark.parametrize("voxel_size", [(1.0, 1.0, 1.0), (1.5, 1.5, 1.5)])
+def test_centered_mask_voxel_size_follows_first_input_mask(tmp_path, monkeypatch, voxel_size):
+    """REQ-CTDEFECTS128-05: returned mask voxel_size == voxel_size of the first input sulcus mask."""
+    d = str(tmp_path / "masks")
+    a = np.zeros(SHAPE, np.int16)
+    a[5:8, 5:8, 5:8] = 12
+    b = np.zeros(SHAPE, np.int16)
+    b[7:10, 7:10, 7:10] = 20
+    _write_mask(d, "A", a, voxel_size=voxel_size)
+    _write_mask(d, "B", b, voxel_size=voxel_size)
+
+    (mask, _, _), _ = _run_centered(d, monkeypatch)
+
+    assert list(mask.header()["voxel_size"])[:3] == pytest.approx(list(voxel_size))
 
 
 def test_centered_mask_is_binary_and_bbox_matches_it(centered):
