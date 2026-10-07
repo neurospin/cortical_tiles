@@ -191,22 +191,27 @@ def _local_config(tmp_path):
     return _dataset(tmp_path, {key: "$local" for key in LOCAL_KEYS})
 
 
+# REQ-CTDEFECTS-21: a $local graph path with an empty argument raises, so every all-$local run
+# that is expected to succeed passes both graph arguments.
+LOCAL_GRAPH_ARGS = dict(path_to_graph="arg/graph", path_sk_with_hull="arg/hull")
+
+
 def test_local_brain_regions_json(gsr, calls, local_cwd):
     """REQ-CTILESTEST-108: $local brain_regions_json -> <4th parent of cwd>/sulci_regions_champollion_V1.json."""
-    _run(gsr, _local_config(local_cwd), output_dir="out")
+    _run(gsr, _local_config(local_cwd), output_dir="out", **LOCAL_GRAPH_ARGS)
     assert calls[0]["brain_regions_json"] == os.path.join(str(local_cwd / "p1"), "sulci_regions_champollion_V1.json")
 
 
 def test_local_supervised_output_dir(gsr, calls, local_cwd):
     """REQ-CTILESTEST-109: $local supervised_output_dir -> <3rd parent of cwd>/cortical_tiles/data."""
-    _run(gsr, _local_config(local_cwd), output_dir="out")
+    _run(gsr, _local_config(local_cwd), output_dir="out", **LOCAL_GRAPH_ARGS)
     assert calls[0]["supervised_output_dir"] == os.path.join(str(local_cwd / "p1" / "p2"), "cortical_tiles/data")
 
 
 def test_local_graphs_dir(gsr, calls, local_cwd):
     """REQ-CTILESTEST-110: $local graphs_dir -> <path_dataset>/derivatives/morphologist-6.0."""
     dataset = _local_config(local_cwd)
-    _run(gsr, dataset, output_dir="out")
+    _run(gsr, dataset, output_dir="out", **LOCAL_GRAPH_ARGS)
     assert calls[0]["graphs_dir"] == os.path.join(str(dataset), "derivatives/morphologist-6.0")
 
 
@@ -214,7 +219,7 @@ def test_local_graphs_dir(gsr, calls, local_cwd):
 def test_local_output_dir_uses_given_output_dir(gsr, calls, local_cwd, output_dir):
     """REQ-CTDEFECTS-14 (inverts REQ-CTILESTEST-111): $local output_dir, output_dir given -> join(dataset, output_dir)."""
     dataset = _local_config(local_cwd)
-    _run(gsr, dataset, output_dir=output_dir)
+    _run(gsr, dataset, output_dir=output_dir, **LOCAL_GRAPH_ARGS)
     assert calls[0]["output_dir"] == os.path.join(str(dataset), output_dir)
 
 
@@ -222,17 +227,38 @@ def test_local_output_dir_uses_given_output_dir(gsr, calls, local_cwd, output_di
 def test_local_output_dir_defaults_to_derivatives_when_not_given(gsr, calls, local_cwd, output_dir):
     """REQ-CTDEFECTS-15 (inverts REQ-CTILESTEST-112): $local output_dir, None/'' -> <dataset>/derivatives/cortical_tiles-<v>."""
     dataset = _local_config(local_cwd)
-    _run(gsr, dataset, output_dir=output_dir)
+    _run(gsr, dataset, output_dir=output_dir, **LOCAL_GRAPH_ARGS)
     expected = os.path.join(str(dataset), f"derivatives/cortical_tiles-{gsr._CORTICAL_TILES_VERSION}")
     assert calls[0]["output_dir"] == expected
 
 
 def test_local_graph_paths_and_qc_path(gsr, calls, local_cwd):
-    """REQ-CTILESTEST-113: $local graph paths take non-empty arguments, else stay '$local'; skel_qc_path = argument."""
-    _run(gsr, _local_config(local_cwd), output_dir="out", path_to_graph="arg/graph", sk_qc_path="arg/qc.tsv")
+    """REQ-CTILESTEST-113: $local graph paths take non-empty arguments; skel_qc_path = argument.
+
+    Its "else stay '$local'" half is inverted by REQ-CTDEFECTS-21 (see the next test).
+    """
+    _run(gsr, _local_config(local_cwd), output_dir="out", sk_qc_path="arg/qc.tsv", **LOCAL_GRAPH_ARGS)
     assert calls[0]["path_to_graph"] == "arg/graph"
-    assert calls[0]["path_to_skeleton_with_hull"] == "$local"
+    assert calls[0]["path_to_skeleton_with_hull"] == "arg/hull"
     assert calls[0]["skel_qc_path"] == "arg/qc.tsv"
+
+
+@pytest.mark.parametrize("empty", ["", None])
+@pytest.mark.parametrize(
+    "config_key, argument",
+    [("path_to_graph", "path_to_graph"), ("path_to_skeleton_with_hull", "path_sk_with_hull")],
+)
+def test_local_graph_path_with_empty_argument_raises_value_error(gsr, calls, local_cwd, config_key, argument, empty):
+    """REQ-CTDEFECTS-21 (inverts REQ-CTILESTEST-113's "stay '$local'"): $local graph path + empty/None argument
+    -> ValueError naming the config key and the argument, before any region runs."""
+    kwargs = dict(LOCAL_GRAPH_ARGS)
+    kwargs[argument] = empty
+    with pytest.raises(ValueError) as excinfo:
+        _run(gsr, _local_config(local_cwd), output_dir="out", **kwargs)
+    message = str(excinfo.value)
+    assert config_key in message
+    assert argument in message
+    assert calls == []
 
 
 # --- REQ-CTILESTEST-114: main ----------------------------------------------------------------------
