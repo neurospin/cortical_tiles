@@ -19,14 +19,6 @@ deep\_folding\.brainvisa\.benchmark\_generation module
     :undoc-members:
     :show-inheritance:
 
-deep\_folding\.brainvisa\.benchmark\_pipeline module
-----------------------------------------------------
-
-.. automodule:: cortical_tiles.brainvisa.benchmark_pipeline
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
 deep\_folding\.brainvisa\.compute\_bounding\_box module
 -------------------------------------------------------
 
