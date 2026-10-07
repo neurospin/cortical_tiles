@@ -50,7 +50,6 @@ REQUIRES = ['six',
             'tqdm>=4.36',
             'pqdm',
             'p_tqdm',
-            'sparse',
             'scikit-image',
             'etelemetry==0.3.1',
             'dico_toolbox @ \

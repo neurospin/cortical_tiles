@@ -20,14 +20,6 @@ deep\_folding\.utils\.save\_results module
     :undoc-members:
     :show-inheritance:
 
-deep\_folding\.utils\.split\_train\_test module
------------------------------------------------
-
-.. automodule:: cortical_tiles.utils.split_train_test
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
 
 Module contents
 ---------------
