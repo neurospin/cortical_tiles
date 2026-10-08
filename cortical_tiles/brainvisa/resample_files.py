@@ -121,7 +121,8 @@ def resample_one_skeleton(input_image,
                           transformation,
                           do_skel,
                           immortals,
-                          redo_classif=True):
+                          redo_classif=True,
+                          srand=None):
     """Resamples one skeleton file
 
     Args
@@ -137,6 +138,8 @@ def resample_one_skeleton(input_image,
         immortals: list
             if do_skel, then the list of immortal voxel values
             (NB: UNCLEAR)
+        srand: int or None
+            VipSkeleton seed for the re-skeletonization (None: clock-based)
 
     Returns:
         resampled: aims.Volume
@@ -157,7 +160,8 @@ def resample_one_skeleton(input_image,
                          transformation=transformation,
                          values=values,
                          do_skel=do_skel,
-                         immortals=immortals)
+                         immortals=immortals,
+                         srand=srand)
     return resampled
 
 
@@ -287,7 +291,7 @@ class FileResampler:
 
     def __init__(self, src_dir, resampled_dir, transform_dir,
                  side, out_voxel_size, parallel,
-                 do_skel, immortals
+                 do_skel, immortals, srand=None
                  ):
         """Inits with list of directories
 
@@ -322,6 +326,7 @@ class FileResampler:
 
         self.do_skel = do_skel
         self.immortals = immortals
+        self.srand = srand
 
     @staticmethod
     def resample_one_subject(src_file: str,
@@ -329,7 +334,8 @@ class FileResampler:
                              transform_file: str,
                              do_skel: bool,
                              immortals: list,
-                             resampled_file=None):
+                             resampled_file=None,
+                             srand=None):
         """Resamples skeleton
 
         This static method is called by resample_one_subject_wrapper
@@ -367,7 +373,8 @@ class FileResampler:
                     transform_file=transform_file,
                     resampled_file=resampled_file,
                     do_skel=self.do_skel,
-                    immortals=self.immortals)
+                    immortals=self.immortals,
+                    srand=self.srand)
                 # aims.write(resampled, resampled_file)
             except Exception as e:
                 log.warning(f"[skip] subject {subject_id}: failed to resample {src_file}: {e}")
@@ -463,7 +470,7 @@ class SkeletonResampler(FileResampler):
 
     def __init__(self, src_dir, resampled_dir, transform_dir,
                  side, out_voxel_size, parallel, src_filename,
-                 output_filename, do_skel, immortals
+                 output_filename, do_skel, immortals, srand=None
                  ):
         """Inits with list of directories
 
@@ -483,7 +490,7 @@ class SkeletonResampler(FileResampler):
             src_dir=src_dir, resampled_dir=resampled_dir,
             transform_dir=transform_dir, side=side,
             out_voxel_size=out_voxel_size, parallel=parallel,
-            do_skel=do_skel, immortals=immortals)
+            do_skel=do_skel, immortals=immortals, srand=srand)
 
         # skeletonization parameters
         self.do_skel = do_skel
@@ -513,7 +520,8 @@ class SkeletonResampler(FileResampler):
                              transform_file: str,
                              do_skel: bool,
                              immortals: list,
-                             resampled_file=None):
+                             resampled_file=None,
+                             srand=None):
         """Resamples skeleton
 
         This static method is called by resample_one_subject_wrapper
@@ -522,7 +530,8 @@ class SkeletonResampler(FileResampler):
                                           out_voxel_size=out_voxel_size,
                                           transformation=transform_file,
                                           do_skel=do_skel,
-                                          immortals=immortals)
+                                          immortals=immortals,
+                                          srand=srand)
         aims.write(resampled, resampled_file)
 
 
@@ -577,7 +586,8 @@ class FoldLabelResampler(FileResampler):
                              transform_file: str,
                              do_skel: bool,
                              immortals=None,
-                             resampled_file=None):
+                             resampled_file=None,
+                             srand=None):
         resampled = resample_one_foldlabel(input_image=src_file,
                                            out_voxel_size=out_voxel_size,
                                            transformation=transform_file)
@@ -635,7 +645,8 @@ class ExtremitiesResampler(FileResampler):
                              transform_file: str,
                              do_skel: bool,
                              immortals=None,
-                             resampled_file=None):
+                             resampled_file=None,
+                             srand=None):
         resampled = resample_one_extremities(input_image=src_file,
                                              out_voxel_size=out_voxel_size,
                                              transformation=transform_file)
@@ -687,7 +698,8 @@ class DistMapResampler(FileResampler):
                              transform_file: str,
                              resampled_file: str,
                              do_skel=None,
-                             immortals=None):
+                             immortals=None,
+                             srand=None):
         resampled = resample_one_distmap(input_image=src_file,
                                          resampled_dir=resampled_file,
                                          out_voxel_size=out_voxel_size,
@@ -760,6 +772,10 @@ def parse_args(argv):
         'Default is : ' +
         _RESAMPLED_SKELETON_FILENAME)
     parser.add_argument(
+        "--skel_seed", type=int, default=None,
+        help='VipSkeleton seed for skeleton re-skeletonization '
+             '(default: None, clock-based seed).')
+    parser.add_argument(
         '-v', '--verbose', action='count', default=0,
         help='Verbose mode: '
         'If no option is provided then logging.INFO is selected. '
@@ -786,6 +802,7 @@ def parse_args(argv):
     params['nb_subjects'] = get_number_subjects(args.nb_subjects)
     params['src_filename'] = args.src_filename
     params['output_filename'] = args.output_filename
+    params['skel_seed'] = args.skel_seed
 
     return params
 
@@ -800,7 +817,8 @@ def resample_files(
         parallel=False,
         nb_subjects=_ALL_SUBJECTS,
         src_filename=_SKELETON_FILENAME,
-        output_filename=_RESAMPLED_SKELETON_FILENAME):
+        output_filename=_RESAMPLED_SKELETON_FILENAME,
+        skel_seed=None):
 
     if input_type == "skeleton":
         src_filename = (_SKELETON_FILENAME
@@ -819,7 +837,8 @@ def resample_files(
             src_filename=src_filename,
             output_filename=output_filename,
             do_skel=True,
-            immortals=[30, 50, 80, 35, 110, 120])
+            immortals=[30, 50, 80, 35, 110, 120],
+            srand=skel_seed)
     elif input_type == "foldlabel":
         src_filename = (_FOLDLABEL_FILENAME
                         if src_filename is None

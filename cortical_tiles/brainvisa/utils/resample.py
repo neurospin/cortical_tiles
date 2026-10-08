@@ -4,7 +4,7 @@
 import os
 import logging
 from time import time
-from typing import Union
+from typing import Optional, Union
 import tempfile
 import subprocess
 
@@ -17,6 +17,17 @@ from cortical_tiles.config.logs import set_file_logger
 log = set_file_logger(__file__)
 
 
+def _compute_srand_options(srand) -> list:
+    """Return the VipSkeleton seed options for srand (pure, O(1)).
+
+    An int (0 included, bool excluded) gives ['-srand', str(srand)];
+    anything else gives [] so VipSkeleton keeps its clock-based seed.
+    """
+    if isinstance(srand, int) and not isinstance(srand, bool):
+        return ['-srand', str(srand)]
+    return []
+
+
 def resample(input_image: Union[str, aims.Volume],
              transformation: Union[str, aims.AffineTransformation3d],
              output_vs: tuple = None,
@@ -26,7 +37,8 @@ def resample(input_image: Union[str, aims.Volume],
              do_skel: bool = False,
              immortals: list = None,
              redo_classif: bool = True,
-             new_dim: tuple = None) -> aims.Volume:
+             new_dim: tuple = None,
+             srand: Optional[int] = None) -> aims.Volume:
     """
         Transforms and resamples a volume that has discret values
 
@@ -61,6 +73,10 @@ def resample(input_image: Union[str, aims.Volume],
         new_dim:
             dimensions of the resampled volume. Default: calculated from input
             volume and voxel size ratio.
+        srand:
+            seed passed as ``-srand`` to both VipSkeleton calls, making the
+            re-skeletonization deterministic. None (default) keeps
+            VipSkeleton's clock-based seed. No effect if do_skel is False.
 
         Return
         ------
@@ -266,12 +282,13 @@ def resample(input_image: Union[str, aims.Volume],
             tmp2 = tempfile.mkstemp(prefix='cortical_tiles_sk_', suffix='.nii')
             os.close(tmp2[0])
             tmps = [tmp[1], tmp2[1]]
+            srand_options = _compute_srand_options(srand)
 
             try:
                 aims.write(borders, tmp[1])
                 # aims.write(borders, '/tmp/borders.nii')  # debug
                 cmd = ['VipSkeleton', '-i', tmp[1], '-so', tmp2[1], '-fv', 'n',
-                       '-sk', 's', '-p', '0', '-c', 'n', '-k']
+                       '-sk', 's', '-p', '0', '-c', 'n', '-k'] + srand_options
                 subprocess.check_call(cmd)
                 borders = aims.read(tmp2[1])
                 # skeleton of resampled with immortals
@@ -282,7 +299,7 @@ def resample(input_image: Union[str, aims.Volume],
                 del borders
                 aims.write(sk_in, tmp[1])
                 cmd = ['VipSkeleton', '-i', tmp[1], '-so', tmp2[1], '-fv', 'n',
-                       '-sk', 's', '-p', '0', '-c', 'n', '-k']
+                       '-sk', 's', '-p', '0', '-c', 'n', '-k'] + srand_options
                 subprocess.check_call(cmd)
                 del sk_in
                 sk_out = aims.read(tmp2[1])
