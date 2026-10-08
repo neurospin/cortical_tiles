@@ -73,6 +73,10 @@ from cortical_tiles.brainvisa.resample_files import resample_files
 # Defines logger
 log = set_file_logger(__file__)
 
+# VipSkeleton seed used when the pipeline JSON config has no "skel_seed" key:
+# a fixed seed makes 2mm re-skeletonization (and so every crop) reproducible.
+DEFAULT_SKEL_SEED = 42
+
 
 # get all the sulci of a given brain region
 def get_sulci_list(
@@ -562,7 +566,8 @@ def run_with_params(params: dict):
                                    'out_voxel_size': params['out_voxel_size'],
                                    'parallel': params['parallel'],
                                    'src_filename': src_filename,
-                                   'output_filename': output_filename}
+                                   'output_filename': output_filename,
+                                   'skel_seed': params.get('skel_seed', DEFAULT_SKEL_SEED)}
 
             setup_log(
                 Namespace(**{'verbose': log.level,

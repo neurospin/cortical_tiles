@@ -107,6 +107,11 @@ def parse_args(argv):
         help="Mask version tag (e.g. 'canonical_25'). "
              "Overrides masks_version in the pipeline JSON config."
     )
+    parser.add_argument(
+        "--skel_seed", type=int, default=None,
+        help="VipSkeleton seed for the 2mm re-skeletonization. "
+             "Overrides skel_seed in the pipeline JSON config."
+    )
 
     params = {}
 
@@ -187,7 +192,8 @@ def _check_local_graph_arguments(config: dict, arguments: dict) -> None:
 
 def generate_sulcal_regions(regions, sides, input_types,
                             path_dataset, verbose, output_dir, path_to_graph,
-                            path_sk_with_hull, sk_qc_path, njobs, masks=None):
+                            path_sk_with_hull, sk_qc_path, njobs, masks=None,
+                            skel_seed=None):
     """Global loops to generate all regions for all dataset"""
 
     # Load and resolve the template ONCE — never written back
@@ -197,6 +203,8 @@ def generate_sulcal_regions(regions, sides, input_types,
 
     if masks:
         resolved_config["masks_version"] = masks
+    if skel_seed is not None:
+        resolved_config["skel_seed"] = skel_seed
 
     if "$local" not in resolved_config.values():
         for src, key in {
