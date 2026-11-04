@@ -3,12 +3,18 @@ Uses the pipeline on multiple regions and datasets,
 for both sides and input type."""
 
 import argparse
+import glob
 import os
-from os.path import join
+from os.path import basename, join
 import json
 import sys
 
+from cortical_tiles.brainvisa.utils.crop_subjects import NoValidSubjectError
 from cortical_tiles.brainvisa.utils.folder import get_nth_parent_dir
+from cortical_tiles.brainvisa.utils.skip_list import \
+    clear_skip_list, load_skip_entries, load_skipped
+from cortical_tiles.brainvisa.utils.subjects import \
+    is_it_a_subject, select_good_qc
 
 from cortical_tiles.brainvisa import exception_handler
 from cortical_tiles.config.logs import set_file_logger
@@ -21,6 +27,9 @@ log = set_file_logger(__file__)
 #_PATH_DATASET_ROOT_DEFAULT = os.path.join(get_nth_parent_dir(os.getcwd(), 3), 'data/') #"/neurospin/dico/data/cortical_tiles/current/datasets"
 # _DATASETS_DEFAULT = ["UkBioBank40"]
 _CORTICAL_TILES_VERSION = "2026"
+# Exit codes of the script; 2 is argparse's
+_EXIT_NO_VALID_SUBJECT = 1
+_EXIT_PARTIAL = 3
 _SIDES_DEFAULT = ["L", "R"]
 _INPUT_TYPES_DEFAULT = ["skeleton", "foldlabel", "extremities"]
 _REGIONS_DEFAULT = ["S.C.-sylv.", "S.C.-S.Pe.C.", "S.C.-S.Po.C.",\
@@ -157,6 +166,8 @@ class RegionPipelineRunner:
         )
 
     def run(self, sides, input_types, njobs):
+        """Runs each side and input type; returns the sides that raised NoValidSubjectError"""
+        raised_sides = set()
         for side in sides:
             for input_type in input_types:
                 cfg = dict(self.config)
@@ -168,11 +179,18 @@ class RegionPipelineRunner:
                         "F.C.L.p.-subsc.-F.C.L.a.-INSULA."
                         and side == "L"):
                     cfg["threshold"] = 1
-                run_with_params(cfg)
+                try:
+                    run_with_params(cfg)
+                except NoValidSubjectError as exc:
+                    log.warning("Region %s side %s input %s: %s",
+                                cfg["region_name"], side, input_type, exc)
+                    raised_sides.add(side)
+                    continue
                 print(
                     f"\nEND\n"
                     f"{cfg['region_name']} {side} {input_type} ok\n"
                 )
+        return raised_sides
 
 
 # ($local config key, argument that must replace it)
@@ -190,11 +208,34 @@ def _check_local_graph_arguments(config: dict, arguments: dict) -> None:
                 "Morphologist graph layouts differ)")
 
 
+def _run_regions(resolved_config, regions, sides, input_types, njobs):
+    """Runs every region; returns the sides that raised NoValidSubjectError
+
+    Under save_behavior clear_and_compute, the skip list of each side is
+    emptied once, before the first region.
+    """
+    if resolved_config.get("save_behavior") == "clear_and_compute":
+        for side in sides:
+            clear_skip_list(resolved_config["output_dir"], side)
+
+    raised_sides = set()
+    for region in regions:
+        raised_sides |= RegionPipelineRunner(resolved_config, region).run(
+            sides, input_types, njobs
+        )
+    return raised_sides
+
+
 def generate_sulcal_regions(regions, sides, input_types,
                             path_dataset, verbose, output_dir, path_to_graph,
                             path_sk_with_hull, sk_qc_path, njobs, masks=None,
                             skel_seed=None):
-    """Global loops to generate all regions for all dataset"""
+    """Global loops to generate all regions for all dataset
+
+    Returns:
+        (resolved_config, raised_sides), raised_sides being the set of the
+        sides whose run_with_params call raised NoValidSubjectError
+    """
 
     # Load and resolve the template ONCE — never written back
     pipeline_json = f"{path_dataset}/pipeline_loop_2mm.json"
@@ -251,10 +292,69 @@ def generate_sulcal_regions(regions, sides, input_types,
             elif k == "skel_qc_path":
                 resolved_config[k] = sk_qc_path
 
-    for region in regions:
-        RegionPipelineRunner(resolved_config, region).run(
-            sides, input_types, njobs
-        )
+    return resolved_config, _run_regions(
+        resolved_config, regions, sides, input_types, njobs)
+
+
+def valid_subjects(config, side):
+    """Returns the subjects of graphs_dir kept by QC and absent from the skip list of side"""
+    names = [basename(path)
+             for path in glob.glob(f"{config['graphs_dir']}/*")
+             if is_it_a_subject(path)]
+    kept = select_good_qc(names, config.get("skel_qc_path", ""))
+    return set(kept) - load_skipped(config["output_dir"], side)
+
+
+def _log_side_summary(side, side_entries, clause):
+    """Logs one ERROR record per step holding an entry in side_entries"""
+    by_step = {}
+    for entry in side_entries:
+        by_step.setdefault(entry.step, []).append(entry)
+    for step, step_entries in by_step.items():
+        subjects = sorted({entry.subject for entry in step_entries})
+        causes = dict.fromkeys(f"{entry.exc_type}: {entry.message}"
+                               for entry in step_entries)
+        log.error("Run summary: side %s, step %s: %d skipped subject(s): %s; "
+                  "causes: %s%s", side, step, len(subjects),
+                  ", ".join(subjects), " | ".join(causes), clause)
+
+
+def log_run_summary(entries, valid, raised_sides):
+    """Logs the skipped subjects of each side and step, and the sides lost with no entry
+
+    Args:
+        entries: dict side -> list of SkipEntry, keyed by the sides of the run
+        valid: dict side -> set of the valid subjects of that side
+        raised_sides: set of the sides that raised NoValidSubjectError
+    """
+    for side, side_entries in entries.items():
+        if side_entries:
+            clause = ""
+            if not valid[side] and any(valid.values()):
+                clause = f"; side {side} keeps no valid subject"
+            _log_side_summary(side, side_entries, clause)
+        elif side in raised_sides:
+            log.error("Run summary: side %s lost: NoValidSubjectError raised, "
+                      "no skip entry", side)
+
+
+def run_exit_code(entries, valid, raised_sides):
+    """Returns the exit code of a run that finished the region loop
+
+    Args:
+        entries: dict side -> list of SkipEntry, keyed by the sides of the run
+        valid: dict side -> set of the valid subjects of that side
+        raised_sides: set of the sides that raised NoValidSubjectError
+
+    Returns:
+        1 when no side keeps a valid subject, else 3 when a subject was
+        skipped or a side raised, else 0
+    """
+    if not any(valid.values()):
+        return _EXIT_NO_VALID_SUBJECT
+    if raised_sides or any(entries.values()):
+        return _EXIT_PARTIAL
+    return 0
 
 
 @exception_handler
@@ -269,7 +369,18 @@ def main(argv):
     print(params)
 
     # Actual API
-    generate_sulcal_regions(**params)
+    outcome = generate_sulcal_regions(**params)
+    if outcome is None:
+        return
+    config, raised_sides = outcome
+    sides = params["sides"]
+    entries = {side: load_skip_entries(config["output_dir"], side)
+               for side in sides}
+    valid = {side: valid_subjects(config, side) for side in sides}
+    log_run_summary(entries, valid, raised_sides)
+    code = run_exit_code(entries, valid, raised_sides)
+    if code:
+        sys.exit(code)
 
 
 ######################################################################
