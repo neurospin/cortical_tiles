@@ -71,6 +71,7 @@ from cortical_tiles.brainvisa.utils.subjects import get_number_subjects
 from cortical_tiles.brainvisa.utils.subjects import select_subjects_int
 from cortical_tiles.brainvisa.utils.folder import create_folder
 from cortical_tiles.brainvisa.utils.logs import setup_log
+from cortical_tiles.brainvisa.utils.skip_list import load_skipped, record_skip
 from cortical_tiles.brainvisa.utils.quality_checks import \
     compare_number_aims_files_with_expected, \
     compare_number_aims_files_with_number_in_source, \
@@ -90,6 +91,7 @@ from cortical_tiles.brainvisa.utils.constants import \
 log = set_file_logger(__file__)
 
 _VX_TOLERANCE = 40
+_STEP = "mask_resampled_foldlabels"
 
 
 def nearest_nonzero_idx(a, x, y, z):
@@ -107,7 +109,7 @@ class FoldLabelMasker:
     """
 
     def __init__(self, src_dir, skeleton_dir, masked_dir,
-                 side, parallel
+                 side, parallel, skip_dir=None
                  ):
         """Inits with list of directories
 
@@ -117,9 +119,12 @@ class FoldLabelMasker:
             masked_dir: name of target (output) directory,
             side: either 'L' or 'R', hemisphere side
             parallel: does parallel computation if True
+            skip_dir: directory of the per-side skip lists; masked_dir
+                when None
         """
         self.side = side
         self.parallel = parallel
+        self.skip_dir = masked_dir if skip_dir is None else skip_dir
 
         # Names of files in function of dictionary: keys = 'subject' and 'side'
         # Src directory contains either 'R' or 'L' a subdirectory
@@ -156,11 +161,11 @@ class FoldLabelMasker:
         f = foldlabel != 0
         s = skel_np != 0
         diff_fs = np.sum(f != s)
-        
-        # try:
-        assert (diff_fs <= _VX_TOLERANCE), \
-            f"subject {subject} has incompatible foldlabel and skeleton. " \
-            f"{np.sum(s)} vx in skeleton, {np.sum(f)} vx in foldlabel"
+
+        if diff_fs > _VX_TOLERANCE:
+            raise ValueError(
+                f"subject {subject} has incompatible foldlabel and skeleton. "
+                f"{np.sum(s)} vx in skeleton, {np.sum(f)} vx in foldlabel")
         if diff_fs != 0:
             warnings.warn(
                 f"subject {subject} has incompatible foldlabel and skeleton. "
@@ -175,18 +180,30 @@ class FoldLabelMasker:
                     f"nearest nonzero at index {d,e,f}, "
                     f"value {foldlabel[d,e,f,0]}")
         f = foldlabel != 0
-        assert np.sum(f != s) == 0, \
-            f"subject {subject} has incompatible foldlabel and skeleton " \
-            "AFTER CORRECTION. " \
-            f"{np.sum(s)} vx in skeleton, {np.sum(f)} vx in foldlabel"
+        if np.sum(f != s) != 0:
+            raise ValueError(
+                f"subject {subject} has incompatible foldlabel and skeleton "
+                "AFTER CORRECTION. "
+                f"{np.sum(s)} vx in skeleton, {np.sum(f)} vx in foldlabel")
         vol = aims.Volume(foldlabel)
         vol.header()['voxel_size'] = old_foldlabel.header()['voxel_size']
         aims.write(
             vol,
             os.path.join(self.masked_dir,
                         f'{self.side}resampled_foldlabel_{subject}.nii.gz'))
-        # except AssertionError as e:
-        #     log.error(str(e))
+
+    def mask_one_subject(self, subject: str):
+        """Masks one subject; records a failure in the side's skip list
+
+        Returns:
+            (subject, None) on success, (subject, reason) on failure
+        """
+        try:
+            self.mask_one_file(subject)
+        except Exception as exc:
+            record_skip(self.skip_dir, self.side, _STEP, subject, exc)
+            return subject, str(exc)
+        return subject, None
 
     def compute(self, nb_subjects=_ALL_SUBJECTS):
         """Loops over nii files
@@ -204,6 +221,7 @@ class FoldLabelMasker:
             log.debug(f"reg exp = {self.expr}")
 
             if os.path.isdir(self.src_dir):
+                skipped = load_skipped(self.skip_dir, self.side)
                 src_files = glob.glob(f"{self.src_dir}/*.nii.gz")
                 log.debug(f"list src files = {src_files}")
                 if src_files:
@@ -219,9 +237,14 @@ class FoldLabelMasker:
                 list_not_processed_subjects = [
                     re.search(self.expr, basename(dI))[1]
                     for dI in not_processed_files]
+                list_not_processed_subjects = [
+                    s for s in list_not_processed_subjects
+                    if s not in skipped]
                 list_all_subjects = [
                     re.search(self.expr, basename(dI))[1]
                     for dI in src_files]
+                list_all_subjects = [
+                    s for s in list_all_subjects if s not in skipped]
             else:
                 raise NotADirectoryError(
                     f"{self.src_dir} doesn't exist or is not a directory")
@@ -244,15 +267,18 @@ class FoldLabelMasker:
                 if self.parallel:
                     log.info(
                         "PARALLEL MODE: subjects are in parallel")
-                    p_map(
-                        self.mask_one_file,
+                    results = p_map(
+                        self.mask_one_subject,
                         list_subjects,
                         num_cpus=define_njobs())
                 else:
                     log.info(
                         "SERIAL MODE: subjects are scanned serially")
-                    for sub in list_subjects:
-                        self.mask_one_file(sub)
+                    results = [self.mask_one_subject(sub)
+                               for sub in list_subjects]
+                for result in results:
+                    if isinstance(result, BaseException):
+                        raise result
             else:
                 list_subjects = []
                 log.info(
@@ -317,6 +343,10 @@ def parse_args(argv):
         help='Number of subjects to take into account, or \'all\'. '
              '0 subject is allowed, for debug purpose.')
     parser.add_argument(
+        "--skip_dir", type=str, default=None,
+        help='Directory of the per-side skip lists '
+             'skip_list_<side>.jsonl. Default: the output directory.')
+    parser.add_argument(
         '-v', '--verbose', action='count', default=0,
         help='Verbose mode: '
         'If no option is provided then logging.INFO is selected. '
@@ -346,14 +376,16 @@ def mask_foldlabel_files(
         masked_dir=_RESAMPLED_FOLDLABEL_DIR_DEFAULT,
         side=_SIDE_DEFAULT,
         parallel=False,
-        nb_subjects=_ALL_SUBJECTS):
+        nb_subjects=_ALL_SUBJECTS,
+        skip_dir=None):
 
     masker = FoldLabelMasker(
         src_dir=src_dir,
         skeleton_dir=skeleton_dir,
         masked_dir=masked_dir,
         side=side,
-        parallel=parallel
+        parallel=parallel,
+        skip_dir=skip_dir
     )
 
     masker.compute(nb_subjects=nb_subjects)
@@ -377,7 +409,8 @@ def main(argv):
         masked_dir=params['masked_dir'],
         side=params['side'],
         nb_subjects=params['nb_subjects'],
-        parallel=params['parallel']
+        parallel=params['parallel'],
+        skip_dir=params['skip_dir']
     )
 
 
