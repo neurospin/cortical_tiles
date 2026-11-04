@@ -57,6 +57,8 @@ from cortical_tiles.brainvisa.utils.save_data import save_to_numpy
 from cortical_tiles.brainvisa.utils.save_data import \
     save_to_dataframe_format_from_list
 from cortical_tiles.brainvisa.utils.folder import create_folder
+from cortical_tiles.brainvisa.utils.crop_subjects import restrict_stack
+from cortical_tiles.brainvisa.utils.skip_list import load_skipped
 from cortical_tiles.brainvisa.utils.logs import LogJson
 from cortical_tiles.brainvisa.utils.logs import setup_log
 from cortical_tiles.brainvisa.utils.parallel import define_njobs
@@ -116,18 +118,21 @@ class DistBottomCropGenerator:
                  src_dir=_CROP_DIR_DEFAULT,
                  crop_dir=_CROP_DIR_DEFAULT,
                  side=_SIDE_DEFAULT,
-                 parallel=False):
+                 parallel=False,
+                 excluded_subjects=frozenset()):
         """Inits with list of directories
         Args:
             src_dir: folder containing generated skeletons, labels or distmaps
             crop_dir: name of output directory for crops with full path
             side: hemisphere side (either L for left,
                                    or R for right hemisphere)
+            excluded_subjects: subjects left out of the distbottom stack
         """
 
         self.crop_dir = crop_dir
         self.side = side
         self.parallel = parallel
+        self.excluded_subjects = frozenset(excluded_subjects)
 
         # Names of files in function of dictionary:
         #               keys -> 'subject' and 'side'
@@ -216,6 +221,11 @@ class DistBottomCropGenerator:
                     list_all_subjects = [
                         re.search(self.expr, basename(dI))[1]
                         for dI in files]
+                    list_not_processed_subjects = [
+                        s for s in list_not_processed_subjects
+                        if s not in self.excluded_subjects]
+                    list_all_subjects = [s for s in list_all_subjects
+                                         if s not in self.excluded_subjects]
                 else:
                     raise ValueError(f"no nifti files in {self.src_dir}")
             else:
@@ -298,12 +308,17 @@ class DistBottomCropGenerator:
                               tgt_dir=self.crop_dir,
                               file_basename=self.file_basename_npy,
                               parallel=self.parallel)
+            restrict_stack(self.crop_dir, self.file_basename_npy,
+                           self.excluded_subjects, write_sub_id=True)
+            kept = [(subject, sample) for subject, sample
+                    in zip(list_sample_id, list_sample_file, strict=True)
+                    if subject not in self.excluded_subjects]
             save_to_dataframe_format_from_list(
                 cropped_dir=self.cropped_samples_dir,
                 tgt_dir=self.crop_dir,
                 file_basename=self.file_basename_pickle,
-                list_sample_id=list_sample_id,
-                list_sample_file=list_sample_file)
+                list_sample_id=[subject for subject, _ in kept],
+                list_sample_file=[sample for _, sample in kept])
 
         quality_checks(self.crop_dir, self.side)
 
@@ -371,17 +386,21 @@ def parse_args(argv):
     return params
 
 
-def generate_distbottom_crops(
+def generate_distbottom_crops(  # noqa: PLR0913 - skip_dir is required by the contract
         src_dir=_CROP_DIR_DEFAULT,
         crop_dir=_CROP_DIR_DEFAULT,
         side=_SIDE_DEFAULT,
         nb_subjects=_ALL_SUBJECTS,
-        parallel=False
+        parallel=False,
+        skip_dir=None
         ):
 
     # Gets function arguments and values
     params = locals()
     nb_subjects = params.pop('nb_subjects')
+    params.pop('skip_dir')
+    skip_dir = crop_dir if skip_dir is None else skip_dir
+    params['excluded_subjects'] = frozenset(load_skipped(skip_dir, side))
 
     # Initialization with same arguments and values as function
     crop = DistBottomCropGenerator(**params)

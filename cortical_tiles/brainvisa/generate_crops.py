@@ -62,7 +62,7 @@ import scipy.ndimage
 from cortical_tiles.brainvisa import exception_handler
 from cortical_tiles.brainvisa.utils.save_data import save_to_numpy
 from cortical_tiles.brainvisa.utils.crop_subjects import \
-    check_stack_has_subjects, collect_failed_subjects, \
+    check_stack_has_subjects, collect_failed_subjects, exclude_empty_rows, \
     quality_checks, quality_checks_extremities, \
     record_one_sided_subjects, restrict_stack
 from cortical_tiles.brainvisa.utils.skip_list import load_skipped, record_skip
@@ -477,6 +477,10 @@ class CropGenerator:
             restrict_stack(self.crop_dir, self.file_basename_npy,
                            self.excluded_subjects | self.failed_subjects,
                            write_sub_id=True)
+            if self.input_type == "skeleton":
+                self.failed_subjects |= exclude_empty_rows(
+                    self.crop_dir, self.side, self.skip_dir, _STEP,
+                    self.cropped_path)
 
 
 class SkeletonCropGenerator(CropGenerator):

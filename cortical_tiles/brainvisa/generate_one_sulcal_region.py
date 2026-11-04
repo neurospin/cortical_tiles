@@ -247,6 +247,26 @@ def parse_args(argv: list) -> dict:
     return params
 
 
+def voxel_size_name(out_voxel_size):
+    """Returns the folder name of a voxel size: raw, or <size>mm"""
+    if out_voxel_size == 'raw':
+        return 'raw'
+    if out_voxel_size - int(out_voxel_size) == 0:  # if voxel size is an int
+        return str(int(out_voxel_size)) + 'mm'
+    return str(out_voxel_size) + 'mm'
+
+
+def crop_region_dir(params, region):
+    """Returns the crop directory of a region under output_dir"""
+    return os.path.join(
+        params['output_dir'],
+        'crops',
+        params.get('masks_version', 'canonical_25'),
+        voxel_size_name(params['out_voxel_size']),
+        region,
+        'no_mask' if params['no_mask'] else 'mask')
+
+
 def run_with_params(params: dict):
     """Execute the full pipeline for one region given a resolved params dict.
 
@@ -260,20 +280,8 @@ def run_with_params(params: dict):
     elif params['side'] == 'L':
         full_side = '_left'
 
-    if params['out_voxel_size'] == 'raw':
-        vox_size = 'raw'
-    else:
-        if params['out_voxel_size'] - \
-                int(params['out_voxel_size']) == 0:  # if voxel size is an int
-            vox_size = str(int(params['out_voxel_size'])) + 'mm'
-        else:
-            vox_size = str(params['out_voxel_size']) + 'mm'
+    vox_size = voxel_size_name(params['out_voxel_size'])
     log.info(vox_size)
-
-    if params['no_mask']:
-        mask_str = 'no_mask'
-    else:
-        mask_str = 'mask'
 
     match params['input_type']:
         case "foldlabel":
@@ -717,11 +725,7 @@ def run_with_params(params: dict):
     else:
         src_dir = resampled_dir
 
-    path_to_crops = os.path.join(
-        params['crops_dir'],
-        vox_size,
-        params['region_name'],
-        mask_str)
+    path_to_crops = crop_region_dir(params, params['region_name'])
     path_to_crops_complete = path_to_crops + \
         '/' + params['side'] + cropdir_name + 's'
 
@@ -793,7 +797,8 @@ def run_with_params(params: dict):
                 'crop_dir': path_to_crops,
                 'side': params['side'],
                 'parallel': params['parallel'],
-                'nb_subjects': params['nb_subjects']}
+                'nb_subjects': params['nb_subjects'],
+                'skip_dir': params['output_dir']}
 
             setup_log(
                 Namespace(**{'verbose': log.level,

@@ -9,7 +9,8 @@ from os.path import basename, join
 import json
 import sys
 
-from cortical_tiles.brainvisa.utils.crop_subjects import NoValidSubjectError
+from cortical_tiles.brainvisa.utils.crop_subjects import \
+    NoValidSubjectError, exclude_empty_crops, mirror_empty_crops
 from cortical_tiles.brainvisa.utils.folder import get_nth_parent_dir
 from cortical_tiles.brainvisa.utils.skip_list import \
     clear_skip_list, load_skip_entries, load_skipped
@@ -18,7 +19,7 @@ from cortical_tiles.brainvisa.utils.subjects import \
 
 from cortical_tiles.brainvisa import exception_handler
 from cortical_tiles.config.logs import set_file_logger
-from generate_one_sulcal_region import run_with_params
+from generate_one_sulcal_region import crop_region_dir, run_with_params
 
 # Defines logger
 log = set_file_logger(__file__)
@@ -212,17 +213,26 @@ def _run_regions(resolved_config, regions, sides, input_types, njobs):
     """Runs every region; returns the sides that raised NoValidSubjectError
 
     Under save_behavior clear_and_compute, the skip list of each side is
-    emptied once, before the first region.
+    emptied once, before the first region. A subject with an empty skeleton
+    crop reaches the skip list of each side after each region, and leaves the
+    stacks and cropped files of each region and side after the last region.
     """
+    output_dir = resolved_config["output_dir"]
     if resolved_config.get("save_behavior") == "clear_and_compute":
         for side in sides:
-            clear_skip_list(resolved_config["output_dir"], side)
+            clear_skip_list(output_dir, side)
 
     raised_sides = set()
+    dropped = set()
     for region in regions:
         raised_sides |= RegionPipelineRunner(resolved_config, region).run(
             sides, input_types, njobs
         )
+        dropped = mirror_empty_crops(output_dir, sides)
+    if dropped:
+        exclude_empty_crops(
+            [crop_region_dir(resolved_config, region) for region in regions],
+            dropped, sides)
     return raised_sides
 
 
