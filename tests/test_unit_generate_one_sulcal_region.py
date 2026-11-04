@@ -15,10 +15,13 @@ rule of TASK-114).
 
 import inspect
 import json
+import logging
 import os
+import re
 
 import pytest
 from cortical_tiles.brainvisa import generate_one_sulcal_region as gosr
+from cortical_tiles.brainvisa.utils.skip_list import record_skip
 
 REGION = "S.Or."
 SULCI = ["S.Or.", "S.Pe.C."]
@@ -51,6 +54,9 @@ SKIP_DIR_STEPS = {
         "generate_crops",
     )
 }
+
+# The real check: `calls` replaces it, as an empty tree has no subject with both volumes.
+COUNT_CHECK = gosr.check_if_number_skeletons_equals_number_foldlabels
 
 # (input_type, out_voxel_size) -> the steps of SKIP_DIR_STEPS that run_with_params calls for it.
 SKIP_DIR_RUNS = {
@@ -103,6 +109,7 @@ def calls(monkeypatch):
     for name in STEP_FUNCTIONS:
         monkeypatch.setattr(gosr, name, make(name))
     monkeypatch.setattr(gosr, "setup_log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gosr, "check_if_number_skeletons_equals_number_foldlabels", lambda *args, **kwargs: None)
     return recorded
 
 
@@ -371,3 +378,267 @@ def test_run_with_params_passes_output_dir_as_skip_dir(
     assert kwargs.get("skip_dir") == params["output_dir"]
     # The recorders take any keyword: the real signature must accept what run_with_params passes.
     inspect.signature(SKIP_DIR_STEPS[step]).bind(**kwargs)
+
+
+# --- skeleton / foldlabel count check: report per subject, raise when no subject is usable ----------
+
+
+def _write_resampled(output_dir, side, skeletons=(), foldlabels=()):
+    """Writes resampled volumes with their .minf sidecars; returns (resampled_dir, skeleton_dir)."""
+    skeleton_dir = os.path.join(output_dir, "skeletons", "2mm")
+    resampled_dir = os.path.join(output_dir, "foldlabels", "2mm")
+    folders = (
+        (os.path.join(skeleton_dir, side), "skeleton", skeletons),
+        (os.path.join(resampled_dir, f"{side}_before_masking"), "foldlabel", foldlabels),
+    )
+    for folder, kind, subjects in folders:
+        for subject in subjects:
+            os.makedirs(folder, exist_ok=True)
+            volume = os.path.join(folder, f"{side}resampled_{kind}_{subject}.nii.gz")
+            for path in (volume, volume + ".minf"):
+                with open(path, "w", encoding="utf-8"):
+                    pass
+    return resampled_dir, skeleton_dir
+
+
+def _skip(skip_dir, side, subjects):
+    for subject in subjects:
+        record_skip(skip_dir, side, "generate_foldlabels", subject, RuntimeError("no graph"))
+
+
+def _spy_count_check(monkeypatch, calls):
+    """Replaces the count check by a recorder of its bound arguments, appended to `calls`."""
+    signature = inspect.signature(COUNT_CHECK)
+
+    def spy(*args, **kwargs):
+        calls.append(("count_check", dict(signature.bind(*args, **kwargs).arguments)))
+
+    monkeypatch.setattr(gosr, "check_if_number_skeletons_equals_number_foldlabels", spy)
+
+
+def _assert_no_valid_subject(raised):
+    # By name: NoValidSubjectError (crop guard, utils/crop_subjects.py) is not on this branch's base yet.
+    assert type(raised).__name__ == "NoValidSubjectError"
+
+
+def _no_valid_subject_error(resampled_dir, skeleton_dir, side, skip_dir):
+    """Returns the error of a check that must find no subject with both volumes."""
+    with pytest.raises(RuntimeError) as excinfo:
+        COUNT_CHECK(resampled_dir, skeleton_dir, side, skip_dir)
+    _assert_no_valid_subject(excinfo.value)
+    return excinfo.value
+
+
+def _warned(caplog, subject=None):
+    """Returns the WARNING messages, those naming `subject` exactly when one is given."""
+    messages = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    if subject is None:
+        return messages
+    return [message for message in messages if re.search(rf"\b{subject}\b", message)]
+
+
+@pytest.mark.parametrize(
+    "skeletons, foldlabels",
+    [
+        ([], []),
+        (["sub-1"], []),
+        ([], ["sub-1"]),
+        (["sub-1"], ["sub-2"]),
+    ],
+)
+def test_count_check_raises_when_no_subject_has_both(tmp_path, skeletons, foldlabels):
+    """REQ-CTFAIL-BDRABCZUK-93A3589FEB57: nothing usable, equal numbers of disjoint subjects included."""
+    resampled_dir, skeleton_dir = _write_resampled(str(tmp_path), "R", skeletons, foldlabels)
+
+    _no_valid_subject_error(resampled_dir, skeleton_dir, "R", str(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "skeletons, foldlabels",
+    [
+        (["sub-1"], ["sub-1"]),
+        (["sub-1", "sub-2"], ["sub-1"]),
+    ],
+)
+def test_count_check_raises_when_only_skip_listed_subjects_have_both(tmp_path, skeletons, foldlabels):
+    """REQ-CTFAIL-BDRABCZUK-93A3589FEB57: a skip-listed subject with both volumes is not usable."""
+    resampled_dir, skeleton_dir = _write_resampled(str(tmp_path), "R", skeletons, foldlabels)
+    _skip(str(tmp_path), "R", ["sub-1"])
+
+    _no_valid_subject_error(resampled_dir, skeleton_dir, "R", str(tmp_path))
+
+
+def test_count_check_warns_once_per_one_sided_subject(tmp_path, caplog):
+    """REQ-CTFAIL-BDRABCZUK-8124960D2098: one record per subject, naming the missing input type only."""
+    caplog.set_level(logging.WARNING)
+    resampled_dir, skeleton_dir = _write_resampled(
+        str(tmp_path), "R", ["sub-1", "sub-2", "sub-3"], ["sub-1", "sub-4"]
+    )
+
+    COUNT_CHECK(resampled_dir, skeleton_dir, "R", str(tmp_path))
+
+    assert len(_warned(caplog)) == 3
+    for subject, missing, present in (
+        ("sub-2", "foldlabel", "skeleton"),
+        ("sub-3", "foldlabel", "skeleton"),
+        ("sub-4", "skeleton", "foldlabel"),
+    ):
+        (message,) = _warned(caplog, subject)
+        assert missing in message
+        assert present not in message
+
+
+@pytest.mark.parametrize(
+    "skeletons, foldlabels",
+    [
+        (["sub-1", "sub-2"], ["sub-1"]),
+        (["sub-1"], ["sub-1", "sub-2"]),
+        (["sub-1", "sub-2"], ["sub-1", "sub-3"]),
+    ],
+)
+def test_count_check_returns_none_when_a_subject_has_both(tmp_path, skeletons, foldlabels):
+    """REQ-CTFAIL-BDRABCZUK-FDEE30DE671F: a mismatch leaves the run going while one subject is usable."""
+    resampled_dir, skeleton_dir = _write_resampled(str(tmp_path), "R", skeletons, foldlabels)
+
+    assert COUNT_CHECK(resampled_dir, skeleton_dir, "R", str(tmp_path)) is None
+
+
+@pytest.mark.parametrize("subjects", [["sub-1"], ["sub-1", "sub-2"]])
+def test_count_check_returns_none_when_numbers_equal(tmp_path, caplog, subjects):
+    """REQ-CTFAIL-BDRABCZUK-FDEE30DE671F: sidecars, the other side and masked foldlabels do not count."""
+    caplog.set_level(logging.WARNING)
+    resampled_dir, skeleton_dir = _write_resampled(str(tmp_path), "R", subjects, subjects)
+    _write_resampled(str(tmp_path), "L", skeletons=["sub-9"])
+    masked = os.path.join(resampled_dir, "R")
+    os.makedirs(masked)
+    with open(os.path.join(masked, "Rresampled_foldlabel_sub-9.nii.gz"), "w", encoding="utf-8"):
+        pass
+
+    assert COUNT_CHECK(resampled_dir, skeleton_dir, "R", str(tmp_path)) is None
+    assert not _warned(caplog)
+
+
+@pytest.mark.parametrize(
+    "skeletons, foldlabels",
+    [
+        (["sub-1", "sub-2"], ["sub-2"]),
+        (["sub-2"], ["sub-1", "sub-2"]),
+        (["sub-1", "sub-2"], ["sub-1", "sub-2"]),
+    ],
+)
+def test_count_check_leaves_skip_listed_subject_out(tmp_path, caplog, skeletons, foldlabels):
+    """REQ-CTFAIL-BDRABCZUK-1BAC19089172: a volume left behind by a skip-listed subject is not reported."""
+    caplog.set_level(logging.WARNING)
+    resampled_dir, skeleton_dir = _write_resampled(str(tmp_path), "R", skeletons, foldlabels)
+    _skip(str(tmp_path), "R", ["sub-1"])
+    caplog.clear()
+
+    assert COUNT_CHECK(resampled_dir, skeleton_dir, "R", str(tmp_path)) is None
+    assert not _warned(caplog)
+
+
+def test_count_check_ignores_skip_list_of_other_side(tmp_path, caplog):
+    """REQ-CTFAIL-BDRABCZUK-1BAC19089172: only the skip list of the checked side excludes a subject."""
+    caplog.set_level(logging.WARNING)
+    resampled_dir, skeleton_dir = _write_resampled(str(tmp_path), "R", ["sub-1", "sub-2"], ["sub-2"])
+    _skip(str(tmp_path), "L", ["sub-1"])
+    caplog.clear()
+
+    COUNT_CHECK(resampled_dir, skeleton_dir, "R", str(tmp_path))
+
+    assert len(_warned(caplog, "sub-1")) == 1
+
+
+def test_count_check_matches_skip_listed_subject_exactly(tmp_path, caplog):
+    """REQ-CTFAIL-BDRABCZUK-1BAC19089172: skip-listed sub-1 does not exclude sub-10."""
+    caplog.set_level(logging.WARNING)
+    resampled_dir, skeleton_dir = _write_resampled(str(tmp_path), "R", ["sub-1", "sub-10", "sub-2"], ["sub-2"])
+    _skip(str(tmp_path), "R", ["sub-1"])
+    caplog.clear()
+
+    COUNT_CHECK(resampled_dir, skeleton_dir, "R", str(tmp_path))
+
+    assert len(_warned(caplog, "sub-10")) == 1
+    assert not _warned(caplog, "sub-1")
+
+
+def test_count_check_error_states_both_numbers(tmp_path):
+    """REQ-CTFAIL-BDRABCZUK-1A9EA2403DB5: the numbers compared, skip-listed subjects left out."""
+    resampled_dir, skeleton_dir = _write_resampled(
+        str(tmp_path), "R", ["sub-1", "sub-2", "sub-3", "sub-4"], ["sub-1"]
+    )
+    _skip(str(tmp_path), "R", ["sub-1"])
+
+    raised = _no_valid_subject_error(resampled_dir, skeleton_dir, "R", str(tmp_path))
+
+    # The temporary directory's own digits must not satisfy the assertion.
+    message = str(raised).replace(str(tmp_path), "")
+    assert {"3", "0"} <= set(re.findall(r"\b\d+\b", message))
+
+
+@pytest.mark.parametrize("side", ["R", "L"])
+def test_count_check_error_names_skip_list_path(tmp_path, side):
+    """REQ-CTFAIL-BDRABCZUK-163609EF0EA9: the message points at <skip_dir>/skip_list_<side>.jsonl."""
+    resampled_dir, skeleton_dir = _write_resampled(str(tmp_path), side, ["sub-1"], ["sub-2"])
+    skip_dir = str(tmp_path / "skips")
+
+    raised = _no_valid_subject_error(resampled_dir, skeleton_dir, side, skip_dir)
+
+    assert os.path.join(skip_dir, f"skip_list_{side}.jsonl") in str(raised)
+
+
+@pytest.mark.parametrize("side", ["R", "L"])
+def test_run_with_params_calls_count_check_between_resample_and_mask(
+    tmp_path, regions_json, calls, monkeypatch, side
+):
+    """REQ-CTFAIL-BDRABCZUK-F134A975CFB1: the check sees foldlabels/<vs>, skeletons/<vs>, the side and output_dir."""
+    _spy_count_check(monkeypatch, calls)
+    params = _params(tmp_path, regions_json, input_type="foldlabel", side=side)
+    gosr.run_with_params(params)
+
+    names = [name for name, _ in calls]
+    assert "count_check" in names
+    assert names.index("resample_files") < names.index("count_check") < names.index("mask_foldlabel_files")
+    (checked,) = _called(calls, "count_check")
+    out = params["output_dir"]
+    assert checked == {
+        "resampled_dir": os.path.join(out, "foldlabels", "2mm"),
+        "skeleton_dir": os.path.join(out, "skeletons", "2mm"),
+        "side": side,
+        "skip_dir": out,
+    }
+
+
+def test_run_with_params_subject_limit_skips_count_check(tmp_path, regions_json, calls, monkeypatch):
+    """REQ-CTFAIL-BDRABCZUK-4EF049A7A611: the first N subjects of two steps may differ once a subject is skipped."""
+    _spy_count_check(monkeypatch, calls)
+    params = _params(tmp_path, regions_json, input_type="foldlabel", nb_subjects=1)
+    gosr.run_with_params(params)
+
+    assert not _called(calls, "count_check")
+
+
+def test_run_with_params_no_common_subject_stops_before_masking(tmp_path, regions_json, calls, monkeypatch):
+    """REQ-CTFAIL-BDRABCZUK-881A3A936D24: the real check's error leaves run_with_params; nothing is masked."""
+    monkeypatch.setattr(gosr, "check_if_number_skeletons_equals_number_foldlabels", COUNT_CHECK)
+    params = _params(tmp_path, regions_json, input_type="foldlabel")
+    _write_resampled(params["output_dir"], "R", ["sub-1"], ["sub-2"])
+
+    with pytest.raises(RuntimeError) as excinfo:
+        gosr.run_with_params(params)
+
+    _assert_no_valid_subject(excinfo.value)
+    assert not _called(calls, "mask_foldlabel_files")
+
+
+def test_run_with_params_one_sided_subject_continues_to_masking(tmp_path, regions_json, calls, monkeypatch, caplog):
+    """REQ-CTFAIL-BDRABCZUK-FDEE30DE671F: one one-sided subject is reported; the pass goes on."""
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setattr(gosr, "check_if_number_skeletons_equals_number_foldlabels", COUNT_CHECK)
+    params = _params(tmp_path, regions_json, input_type="foldlabel")
+    _write_resampled(params["output_dir"], "R", ["sub-1", "sub-2"], ["sub-1"])
+
+    gosr.run_with_params(params)
+
+    assert len(_warned(caplog, "sub-2")) == 1
+    assert len(_called(calls, "mask_foldlabel_files")) == 1
