@@ -71,6 +71,7 @@ from cortical_tiles.brainvisa.utils.quality_checks import \
     compare_number_aims_files_with_expected, \
     get_not_processed_subjects, \
     save_list_to_csv
+from cortical_tiles.brainvisa.utils.skip_list import load_skipped, record_skip
 from cortical_tiles.config.logs import set_file_logger
 
 # Import constants
@@ -82,6 +83,9 @@ from cortical_tiles.brainvisa.utils.constants import \
 
 # Defines logger
 log = set_file_logger(__file__)
+
+# Member of SKIP_STEPS under which this step records its failures
+_STEP = "generate_foldlabels"
 
 
 def parse_args(argv):
@@ -136,6 +140,10 @@ def parse_args(argv):
              '0 subject is allowed, for debug purpose.'
              'Default is : all')
     parser.add_argument(
+        "--skip_dir", type=str, default=None,
+        help='Directory of the per-side skip lists skip_list_<side>.jsonl. '
+             'Default: the output directory.')
+    parser.add_argument(
         '-v', '--verbose', action='count', default=0,
         help='Verbose mode: '
         'If no option is provided then logging.INFO is selected. '
@@ -159,6 +167,7 @@ def parse_args(argv):
     params['parallel'] = args.parallel
     params['bids'] = args.bids
     params['qc_path'] = args.qc_path
+    params['skip_dir'] = args.skip_dir
     # Checks if nb_subjects is either the string "all" or a positive integer
     params['nb_subjects'] = get_number_subjects(args.nb_subjects)
 
@@ -174,8 +183,9 @@ class GraphConvert2FoldLabel:
 
     def __init__(self, src_dir, foldlabel_dir,
                  side, junction, parallel,
-                 path_to_graph, bids, qc_path):
+                 path_to_graph, bids, qc_path, skip_dir=None):
         self.src_dir = src_dir
+        self.skip_dir = foldlabel_dir if skip_dir is None else skip_dir
         self.foldlabel_dir = foldlabel_dir
         self.side = side
         self.qc_path = qc_path
@@ -208,17 +218,20 @@ class GraphConvert2FoldLabel:
         """Generates and writes foldlabel for one subject.
 
         Returns (subject, None) on success or (subject, error_message) on
-        failure so that compute() can collect a per-subject report without
-        crashing the whole batch.
+        failure; a failure is recorded in the side's skip list, so that
+        compute() can collect a per-subject report without crashing the
+        whole batch.
         """
         # Gets graph file path
         graph_path = f"{self.src_dir}/{subject}/" +\
                      f"{self.path_to_graph}/{self.side}*.arg"
         list_graph_file = glob.glob(graph_path)
         log.debug(f"list_graph_file = {list_graph_file}")
-        if len(list_graph_file) == 0:
-            msg = f"No graph file: {graph_path} doesn't exist"
-            return (subject, msg)
+        if not list_graph_file:
+            exc = FileNotFoundError(
+                f"No graph file: {graph_path} doesn't exist")
+            record_skip(self.skip_dir, self.side, _STEP, subject, exc)
+            return subject, str(exc)
 
         try:
             for graph_file in list_graph_file:
@@ -230,10 +243,9 @@ class GraphConvert2FoldLabel:
                 if not self.bids:
                     break
         except Exception as exc:
-            msg = str(exc)
-            return (subject, msg)
-
-        return (subject, None)
+            record_skip(self.skip_dir, self.side, _STEP, subject, exc)
+            return subject, str(exc)
+        return subject, None
 
     def compute(self, nb_subjects):
         """Loops over subjects and converts graphs into skeletons.
@@ -244,10 +256,12 @@ class GraphConvert2FoldLabel:
                          if is_it_a_subject(filename)]
         log.info(f"Number of subjects before qc = {len(list_subjects)}")
         qc_subjects = select_good_qc(list_subjects, self.qc_path)
+        skipped = load_skipped(self.skip_dir, self.side)
+        processable = [s for s in qc_subjects if s not in skipped]
         not_processed_subjects = get_not_processed_subjects(
-            qc_subjects, self.foldlabel_dir, "foldlabel_")
+            processable, self.foldlabel_dir, "foldlabel_")
 
-        list_subjects = select_subjects_int(qc_subjects,
+        list_subjects = select_subjects_int(processable,
                                             not_processed_subjects,
                                             nb_subjects)
 
@@ -267,29 +281,32 @@ class GraphConvert2FoldLabel:
             results = [self.generate_one_foldlabel(sub)
                        for sub in list_subjects]
 
-        # Build per-subject report (print to stdout — log goes to file)
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+
+        # Per-subject report, through the logger (nothing on stdout)
         failures = {sub: reason for sub, reason in results
                     if reason is not None}
         n_ok = len(list_subjects) - len(failures)
         lines = [
-            "",
-            "--- Foldlabel generation summary ---",
+            f"--- Foldlabel generation summary (side={self.side}) ---",
             f"  Succeeded: {n_ok}/{len(list_subjects)}",
         ]
         if failures:
             lines.append(f"  Skipped ({len(failures)}):")
             for sub, reason in sorted(failures.items()):
                 lines.append(f"    {sub}: {reason}")
-        lines.append("------------------------------------")
-        print("\n".join(lines), flush=True)
+        log.info("\n".join(lines))
 
         # Checks if there is the expected number of generated files
         compare_number_aims_files_with_expected(self.foldlabel_dir,
                                                 list_subjects)
         not_processed_subjects = get_not_processed_subjects(
             qc_subjects, self.foldlabel_dir, "foldlabel_")
-        save_list_to_csv(not_processed_subjects,
-                         f"{self.foldlabel_dir}/../not_processed_files.csv")
+        save_list_to_csv(
+            not_processed_subjects,
+            f"{self.foldlabel_dir}/../not_processed_files_{self.side}.csv")
 
 
 def generate_foldlabels(
@@ -301,7 +318,8 @@ def generate_foldlabels(
         bids=False,
         parallel=False,
         nb_subjects=_ALL_SUBJECTS,
-        qc_path=_QC_PATH_DEFAULT):
+        qc_path=_QC_PATH_DEFAULT,
+        skip_dir=None):
     """Generates foldlabels from graphs"""
 
     # Gets function arguments and values

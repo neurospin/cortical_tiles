@@ -14,6 +14,7 @@ pin current behaviour that looks wrong; it is recorded, not fixed (tests-only ru
 
 import csv
 import inspect
+import logging
 import os
 import types
 
@@ -21,6 +22,7 @@ import numpy as np
 import pytest
 from cortical_tiles.brainvisa import generate_foldlabels as gf
 from cortical_tiles.brainvisa.utils import foldlabel as fl
+from cortical_tiles.brainvisa.utils.skip_list import SkipEntry, load_skip_entries, load_skipped, record_skip
 from pathos import multiprocessing as pathos_mp
 from soma import aims
 
@@ -95,16 +97,22 @@ def src(tmp_path):
     return src
 
 
-def _converter(src, out, bids=False, parallel=False, junction="thin"):
+def _skip_dir(out):
+    """Skip-list directory of the converter writing into ``out``: a sibling of ``out``, inside the test's tmp dir."""
+    return out.parent / "skip"
+
+
+def _converter(src, out, bids=False, parallel=False, junction="thin", side=SIDE):
     return gf.GraphConvert2FoldLabel(
         src_dir=str(src),
         foldlabel_dir=str(out),
-        side=SIDE,
+        side=side,
         junction=junction,
         parallel=parallel,
         path_to_graph=PATH_TO_GRAPH,
         bids=bids,
         qc_path="",
+        skip_dir=str(_skip_dir(out)),
     )
 
 
@@ -208,6 +216,7 @@ def test_one_foldlabel_bids_writes_one_file_per_graph(src, tmp_path, graph_reade
         path_to_graph=PATH_TO_GRAPH,
         bids=True,
         qc_path="",
+        skip_dir=str(tmp_path / "skip"),
     )
     conv.src_dir = f"{session_root}/*"  # glob spans both sessions
 
@@ -221,17 +230,27 @@ def test_one_foldlabel_bids_writes_one_file_per_graph(src, tmp_path, graph_reade
 # --- REQ-CTILESTEST-134..136: compute --------------------------------------------------------------
 
 
-def test_compute_prints_summary(src, tmp_path, graph_reader, expected, capsys):
-    """REQ-CTILESTEST-134: stdout reports 'Succeeded: k/n' and one '<subject>: <reason>' line per failure."""
+def test_compute_logs_summary(src, tmp_path, graph_reader, expected, capsys, caplog):
+    """REQ-CTFAIL-BDRABCZUK-759C66EFFD0F (supersedes REQ-CTILESTEST-134): one INFO record of the
+    generate_foldlabels logger holds 'Succeeded: k/n', 'Skipped (n-k):' and one '<subject>: <reason>' line
+    per failure; nothing goes to stdout."""
     _add_subject(src, BAD_SUBJECT)
     (src / "s0").mkdir()  # no graph
+    caplog.set_level(logging.INFO)
     _converter(src, tmp_path / "labels").compute(nb_subjects=-1)
 
-    out = capsys.readouterr().out
-    assert "Succeeded: 2/4" in out
-    assert "Skipped (2):" in out
-    assert f"    s0: No graph file: {src}/s0/{PATH_TO_GRAPH}/{SIDE}*.arg doesn't exist" in out
-    assert f"    {BAD_SUBJECT}: Error generating foldlabel from" in out
+    summaries = [
+        record
+        for record in caplog.records
+        if record.name == gf.log.name and record.levelno == logging.INFO and "Succeeded: " in record.getMessage()
+    ]
+    assert len(summaries) == 1
+    message = summaries[0].getMessage()
+    assert "Succeeded: 2/4" in message
+    assert "Skipped (2):" in message
+    assert f"    s0: No graph file: {src}/s0/{PATH_TO_GRAPH}/{SIDE}*.arg doesn't exist" in message
+    assert f"    {BAD_SUBJECT}: Error generating foldlabel from" in message
+    assert capsys.readouterr().out == ""
     for subject in ("s1", "s2"):
         np.testing.assert_array_equal(
             _read(tmp_path / "labels" / SIDE / f"{SIDE}foldlabel_{subject}.nii.gz"), expected()
@@ -239,18 +258,20 @@ def test_compute_prints_summary(src, tmp_path, graph_reader, expected, capsys):
 
 
 def test_compute_does_not_list_converted_subjects_as_not_processed(src, tmp_path, graph_reader):
-    """REQ-CTDEFECTS-18 (inverts REQ-CTILESTEST-135): converted subjects are absent from not_processed_files.csv."""
+    """REQ-CTFAIL-BDRABCZUK-59946FB937BD (supersedes REQ-CTDEFECTS-18): converted subjects are absent from
+    the side's not_processed_files_<side>.csv."""
     (src / "s1.minf").write_text("")
     _add_subject(src, BAD_SUBJECT)
     _converter(src, tmp_path / "labels").compute(nb_subjects=-1)
 
     assert _niftis(tmp_path / "labels" / SIDE) == [f"{SIDE}foldlabel_s1.nii.gz", f"{SIDE}foldlabel_s2.nii.gz"]
-    with open(tmp_path / "labels" / "not_processed_files.csv") as handle:
+    with open(tmp_path / "labels" / f"not_processed_files_{SIDE}.csv") as handle:
         assert sorted(row[0] for row in csv.reader(handle)) == [BAD_SUBJECT]
 
 
 def test_compute_not_processed_csv_excludes_qc_rejected_subjects(src, tmp_path, graph_reader):
-    """REQ-CTDEFECTS-18: a subject rejected by the QC file is absent from not_processed_files.csv."""
+    """REQ-CTFAIL-BDRABCZUK-59946FB937BD (supersedes REQ-CTDEFECTS-18): a subject rejected by the QC file is
+    absent from the side's not_processed_files_<side>.csv."""
     _add_subject(src, BAD_SUBJECT)
     _add_subject(src, "s9rejected")
     qc_path = tmp_path / "qc.tsv"
@@ -264,11 +285,12 @@ def test_compute_not_processed_csv_excludes_qc_rejected_subjects(src, tmp_path, 
         path_to_graph=PATH_TO_GRAPH,
         bids=False,
         qc_path=str(qc_path),
+        skip_dir=str(tmp_path / "skip"),
     )
     conv.compute(nb_subjects=-1)
 
     assert _niftis(tmp_path / "labels" / SIDE) == [f"{SIDE}foldlabel_s1.nii.gz", f"{SIDE}foldlabel_s2.nii.gz"]
-    with open(tmp_path / "labels" / "not_processed_files.csv") as handle:
+    with open(tmp_path / "labels" / f"not_processed_files_{SIDE}.csv") as handle:
         assert sorted(row[0] for row in csv.reader(handle)) == [BAD_SUBJECT]
 
 
@@ -285,12 +307,182 @@ def test_compute_parallel_matches_serial(src, tmp_path, graph_reader, expected):
         )
 
 
+# --- REQ-CTFAIL-BDRABCZUK-E22179FF84DB / 20790A85DD4E / A64ED2E15FF0 / 59946FB937BD / 2311D75B2EFD /
+# 8F6ACD36E459 / 0AEBFF72FBD7 ----------------------------------------------------------------------
+# The failure rule itself (ERROR record, traceback, skip-list format) belongs to skip_list.py
+# (REQ-CTFAIL-BDRABCZUK-826AB670054E and siblings); these tests pin only what generate_foldlabels adds.
+
+
+@pytest.fixture
+def raising_generator(monkeypatch):
+    """generate_foldlabel_from_graph_file raises RuntimeError('boom') from KeyError for BAD_SUBJECT's graph,
+    writes nothing for the others; the raised exceptions are collected."""
+    raised = []
+
+    def generate(graph_file, foldlabel_file, junction):
+        if BAD_SUBJECT in graph_file:
+            try:
+                raise KeyError("aims_ss")
+            except KeyError as cause:
+                exc = RuntimeError("boom")
+                exc.__cause__ = cause
+                raised.append(exc)
+                raise exc
+
+    monkeypatch.setattr(gf, "generate_foldlabel_from_graph_file", generate)
+    return raised
+
+
+def test_failing_subject_is_recorded_in_side_skip_list(src, tmp_path, raising_generator):
+    """REQ-CTFAIL-BDRABCZUK-E22179FF84DB: a subject whose generation raises is in the side's skip list, with
+    step generate_foldlabels and the type and message of the raised exception (not only str(exc))."""
+    _add_subject(src, BAD_SUBJECT)
+    out = tmp_path / "labels"
+    _converter(src, out).compute(nb_subjects=-1)
+
+    assert load_skip_entries(_skip_dir(out), SIDE) == [
+        SkipEntry(subject=BAD_SUBJECT, step="generate_foldlabels", exc_type="RuntimeError", message="boom")
+    ]
+    assert load_skip_entries(_skip_dir(out), "L") == []
+
+
+def test_failing_subject_error_record_carries_the_raised_exception(src, tmp_path, raising_generator, caplog):
+    """REQ-CTFAIL-BDRABCZUK-E22179FF84DB: record_skip receives the raised exception object itself, so the
+    ERROR record carries its traceback and __cause__ chain."""
+    _add_subject(src, BAD_SUBJECT)
+    caplog.set_level(logging.ERROR)
+    _converter(src, tmp_path / "labels").compute(nb_subjects=-1)
+
+    assert len(raising_generator) == 1
+    carried = [record for record in caplog.records if record.exc_info and record.exc_info[1] is raising_generator[0]]
+    assert len(carried) == 1
+    assert isinstance(carried[0].exc_info[1].__cause__, KeyError)
+
+
+def test_parallel_failing_subject_is_recorded_in_side_skip_list(src, tmp_path, graph_reader):
+    """REQ-CTFAIL-BDRABCZUK-E22179FF84DB: in parallel mode a failing subject is recorded in the side's skip
+    list too, and only that subject."""
+    _add_subject(src, BAD_SUBJECT)
+    out = tmp_path / "labels"
+    _clear_pathos_pools()
+    try:
+        _converter(src, out, parallel=True).compute(nb_subjects=-1)
+    finally:
+        _clear_pathos_pools()
+
+    entries = load_skip_entries(_skip_dir(out), SIDE)
+    assert [(entry.subject, entry.step) for entry in entries] == [(BAD_SUBJECT, "generate_foldlabels")]
+
+
+def test_subject_without_graph_is_recorded_as_file_not_found(src, tmp_path, graph_reader):
+    """REQ-CTFAIL-BDRABCZUK-20790A85DD4E: a subject with no graph file of the side is in the side's skip list
+    with exception type FileNotFoundError."""
+    (src / "s0").mkdir()  # no graph
+    out = tmp_path / "labels"
+    _converter(src, out).compute(nb_subjects=-1)
+
+    entries = load_skip_entries(_skip_dir(out), SIDE)
+    assert [(entry.subject, entry.step, entry.exc_type) for entry in entries] == [
+        ("s0", "generate_foldlabels", "FileNotFoundError")
+    ]
+
+
+def test_skip_listed_subject_is_not_processed(src, tmp_path, graph_reader):
+    """REQ-CTFAIL-BDRABCZUK-A64ED2E15FF0: a subject already in the side's skip list (here from an earlier step)
+    gets no fold-label file and its graph is not read; the other subjects are converted."""
+    out = tmp_path / "labels"
+    record_skip(_skip_dir(out), SIDE, "generate_skeletons", "s2", RuntimeError("no skeleton"))
+    _converter(src, out).compute(nb_subjects=-1)
+
+    assert _niftis(out / SIDE) == [f"{SIDE}foldlabel_s1.nii.gz"]
+    assert [path for path in graph_reader if "/s2/" in path] == []
+
+
+def test_left_and_right_not_processed_lists_are_kept_apart(tmp_path, graph_reader):
+    """REQ-CTFAIL-BDRABCZUK-59946FB937BD: an L run then an R run into the same folder leave one
+    not_processed_files_<side>.csv per side, each listing that side's subjects without a fold label."""
+    src = tmp_path / "graphs"
+    src.mkdir()
+    for subject in ("s1", "s2", BAD_SUBJECT):
+        _add_subject(src, subject, graph_names=[f"L{subject}.arg", f"R{subject}.arg"])
+    _add_subject(src, "s5ronly", graph_names=["Rs5ronly.arg"])
+    out = tmp_path / "labels"
+    _converter(src, out, side="L").compute(nb_subjects=-1)
+    _converter(src, out, side="R").compute(nb_subjects=-1)
+
+    lists = {}
+    for side in ("L", "R"):
+        with open(out / f"not_processed_files_{side}.csv") as handle:
+            lists[side] = sorted(row[0] for row in csv.reader(handle))
+    assert lists == {"L": [BAD_SUBJECT, "s5ronly"], "R": [BAD_SUBJECT]}
+
+
+def _generate_foldlabels(src, foldlabel_dir, **extra):
+    gf.generate_foldlabels(
+        src_dir=str(src),
+        foldlabel_dir=str(foldlabel_dir),
+        path_to_graph=PATH_TO_GRAPH,
+        side=SIDE,
+        junction="thin",
+        bids=False,
+        parallel=False,
+        nb_subjects=-1,
+        qc_path="",
+        **extra,
+    )
+
+
+def test_generate_foldlabels_records_failures_in_skip_dir(src, tmp_path, graph_reader):
+    """REQ-CTFAIL-BDRABCZUK-2311D75B2EFD: the failure is recorded in the skip list of the skip_dir argument (the
+    run's shared skip list), not under foldlabel_dir or the directories above it."""
+    _add_subject(src, BAD_SUBJECT)
+    output_dir = tmp_path / "run"
+    shared = tmp_path / "shared"
+    _generate_foldlabels(src, output_dir / "foldlabels" / "raw", skip_dir=str(shared))
+
+    assert load_skipped(shared, SIDE) == {BAD_SUBJECT}
+    assert sorted(path.name for path in output_dir.rglob("skip_list_*.jsonl")) == []
+
+
+def test_generate_foldlabels_reads_skip_list_of_skip_dir(src, tmp_path, graph_reader):
+    """REQ-CTFAIL-BDRABCZUK-2311D75B2EFD: a subject in the skip list of the skip_dir argument is not converted."""
+    shared = tmp_path / "shared"
+    record_skip(shared, SIDE, "generate_skeletons", "s2", RuntimeError("no skeleton"))
+    foldlabel_dir = tmp_path / "run" / "foldlabels" / "raw"
+    _generate_foldlabels(src, foldlabel_dir, skip_dir=str(shared))
+
+    assert _niftis(foldlabel_dir / SIDE) == [f"{SIDE}foldlabel_s1.nii.gz"]
+
+
+def test_generate_foldlabels_without_skip_dir_uses_foldlabel_dir(src, tmp_path, graph_reader):
+    """REQ-CTFAIL-BDRABCZUK-8F6ACD36E459: called without skip_dir, generate_foldlabels records the failure in the
+    skip list of its foldlabel_dir argument."""
+    _add_subject(src, BAD_SUBJECT)
+    foldlabel_dir = tmp_path / "labels"
+    _generate_foldlabels(src, foldlabel_dir)
+
+    assert load_skipped(foldlabel_dir, SIDE) == {BAD_SUBJECT}
+
+
+def test_main_passes_skip_dir_option(tmp_path, monkeypatch):
+    """REQ-CTFAIL-BDRABCZUK-0AEBFF72FBD7: --skip_dir DIR on the command line reaches generate_foldlabels as
+    skip_dir=DIR."""
+    received = []
+    monkeypatch.setattr(gf, "generate_foldlabels", lambda **kwargs: received.append(kwargs))
+    shared = str(tmp_path / "shared")
+
+    gf.main(["-s", str(tmp_path), "-o", str(tmp_path / "labels"), "--skip_dir", shared])
+
+    assert [kwargs["skip_dir"] for kwargs in received] == [shared]
+
+
 # --- REQ-CTILESTEST-137: parse_args ---------------------------------------------------------------
 
 
 @pytest.mark.parametrize("extra", [[], ["-j", "wide", "-n", "3", "-b"]])
 def test_parse_args_returns_generate_foldlabels_keyword_arguments(tmp_path, extra):
-    """REQ-CTDEFECTS-19 (inverts REQ-CTILESTEST-137): parse_args keys == generate_foldlabels parameter names."""
+    """REQ-CTDEFECTS-19 (inverts REQ-CTILESTEST-137), REQ-CTFAIL-BDRABCZUK-0AEBFF72FBD7: parse_args keys ==
+    generate_foldlabels parameter names (skip_dir included)."""
     params = gf.parse_args(["-s", str(tmp_path), "-o", str(tmp_path / "labels"), *extra])
     assert set(params) == set(inspect.signature(gf.generate_foldlabels).parameters)
 
