@@ -17,12 +17,20 @@ pin current behaviour that looks wrong; it is recorded, not fixed (tests-only ru
 
 import inspect
 import json
+import logging
 import os
+import re
+import runpy
+import sys
 
 import pytest
 
+from cortical_tiles.brainvisa.utils.crop_subjects import NoValidSubjectError
+from cortical_tiles.brainvisa.utils.skip_list import load_skip_entries, record_skip
+
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BRAINVISA_DIR = os.path.join(REPO_DIR, "cortical_tiles", "brainvisa")
+SCRIPT = os.path.join(BRAINVISA_DIR, "generate_sulcal_regions.py")
 
 INSULA = "F.C.L.p.-subsc.-F.C.L.a.-INSULA."
 
@@ -274,3 +282,486 @@ def test_main_passes_parsed_arguments(gsr, monkeypatch):
 
     assert received == [gsr.parse_args(argv)]
     assert received[0]["sides"] == ["R"] and received[0]["regions"] == ["S.Or."] and received[0]["njobs"] == 2
+
+
+# --- TASK-CTFAIL-BDRABCZUK-A3796AA95383: run summary, exit code, skip-list reset -------------------
+#
+# These tests drive the script as ``python generate_sulcal_regions.py`` does (runpy, __main__), so
+# they pin the process exit code whichever function computes it. ``run_with_params`` is replaced on
+# its own module, which the script imports it from. Entries recorded before the run are what a
+# normal rerun finds; caplog is cleared after seeding, so the ERROR records left are the summary's.
+
+SKELETONS = "generate_skeletons"
+CROPS = "generate_crops"
+NO_VALID_SUBJECT = re.compile("no valid subject", re.IGNORECASE)
+
+
+class ScriptRun:
+    """One dataset for the script: subject folders under graphs_dir, skip lists under output_dir."""
+
+    def __init__(self, tmp_path, monkeypatch, sulcal_module, caplog):
+        self.graphs_dir = tmp_path / "graphs"
+        self.output_dir = tmp_path / "out"
+        self.dataset = tmp_path / "dataset"
+        self.calls = []
+        self.on_call = None
+        self.config = {
+            "save_behavior": "best",
+            "graphs_dir": str(self.graphs_dir),
+            "output_dir": str(self.output_dir),
+            "path_to_graph": "cfg/graph",
+            "path_to_skeleton_with_hull": "cfg/hull",
+            "skel_qc_path": "",
+        }
+        self._monkeypatch = monkeypatch
+        self._caplog = caplog
+        self.graphs_dir.mkdir()
+        self.dataset.mkdir()
+        monkeypatch.setattr(sulcal_module, "run_with_params", self._record_call)
+
+    def _record_call(self, cfg):
+        self.calls.append((cfg["region_name"], cfg["side"], cfg["input_type"]))
+        if self.on_call is not None:
+            self.on_call(cfg)
+
+    def subjects(self, *names):
+        for name in names:
+            (self.graphs_dir / name).mkdir()
+
+    def skip(self, side, step, subject, exc=None, skip_dir=None):
+        record_skip(skip_dir or self.output_dir, side, step, subject, exc or ValueError("bad graph"))
+
+    def run(self, sides=("L", "R"), regions=("S.Or.",), extra=()):
+        """Runs the script and returns its exit code; caplog then holds the records of this run only."""
+        (self.dataset / "pipeline_loop_2mm.json").write_text(json.dumps(self.config))
+        argv = ["-d", str(self.dataset), "--path_to_graph", "G", "--path_sk_with_hull", "H"]
+        argv += ["-i", *sides, "-r", *regions, "-y", "skeleton", *extra]
+        self._monkeypatch.setattr(sys, "argv", ["generate_sulcal_regions.py", *argv])
+        self._caplog.clear()
+        with self._caplog.at_level(logging.INFO):
+            try:
+                runpy.run_path(SCRIPT, run_name="__main__")
+            except SystemExit as exc:
+                return 0 if exc.code is None else exc.code
+            except Exception:  # the interpreter turns an uncaught exception into exit 1
+                return 1
+        return 0
+
+    def summary_records(self):
+        """The ERROR messages of the run, record_skip's own per-subject records left out."""
+        return [
+            record.getMessage()
+            for record in self._caplog.records
+            if record.levelno == logging.ERROR and not record.getMessage().startswith("Skipping subject")
+        ]
+
+
+@pytest.fixture
+def script(gsr, tmp_path, monkeypatch, caplog):
+    import generate_one_sulcal_region
+
+    return ScriptRun(tmp_path, monkeypatch, generate_one_sulcal_region, caplog)
+
+
+def _summary_of(script, side, step):
+    """The only summary record naming ``step`` for ``side``."""
+    side_word = re.compile(rf"\b{side}\b")
+    found = [message for message in script.summary_records() if step in message and side_word.search(message)]
+    assert len(found) == 1, f"expected one summary of {side}/{step}, got {script.summary_records()}"
+    return found[0]
+
+
+# --- run summary -----------------------------------------------------------------------------------
+
+
+def test_run_summary_logs_one_error_record_per_side_and_step(script):
+    """REQ-CTFAIL-BDRABCZUK-9EC36FABC64D: one ERROR record per (side in sides, step with an entry)."""
+    script.subjects("sub-a", "sub-b", "sub-c")
+    script.skip("L", SKELETONS, "sub-a")
+    script.skip("L", SKELETONS, "sub-b")
+    script.skip("L", CROPS, "sub-b")
+    script.skip("R", CROPS, "sub-c")
+
+    script.run()
+
+    assert len(script.summary_records()) == 3
+    for side, step in (("L", SKELETONS), ("L", CROPS), ("R", CROPS)):
+        _summary_of(script, side, step)
+
+
+def test_run_summary_logs_no_error_record_without_skip_entry(script):
+    """REQ-CTFAIL-BDRABCZUK-9EC36FABC64D: nothing skipped, no summary record."""
+    script.subjects("sub-a")
+
+    script.run()
+
+    assert script.summary_records() == []
+
+
+def test_run_summary_covers_entry_recorded_in_last_region_call(script):
+    """REQ-CTFAIL-BDRABCZUK-9EC36FABC64D: the summary follows the region loop, so it sees its last entry."""
+    script.subjects("sub-a", "sub-b")
+
+    def skip_on_last_call(_cfg):
+        if len(script.calls) == 2:
+            script.skip("R", CROPS, "sub-b")
+
+    script.on_call = skip_on_last_call
+
+    script.run()
+
+    assert "sub-b" in _summary_of(script, "R", CROPS)
+
+
+def test_run_summary_states_distinct_subject_count(script):
+    """REQ-CTFAIL-BDRABCZUK-59AE13F7DD6E: the count is of distinct subjects, a repeated entry counts once."""
+    script.subjects("sub-a", "sub-b", "sub-c")
+    script.skip("L", CROPS, "sub-a")
+    script.skip("L", CROPS, "sub-a")
+    script.skip("L", CROPS, "sub-b")
+
+    script.run()
+
+    assert re.search(r"\b2\b", _summary_of(script, "L", CROPS))
+
+
+def test_run_summary_names_each_subject(script):
+    """REQ-CTFAIL-BDRABCZUK-7F013865AC3D: each distinct subject of that side and step, and no other."""
+    script.subjects("sub-a", "sub-b", "sub-c")
+    script.skip("L", CROPS, "sub-a")
+    script.skip("L", CROPS, "sub-a")
+    script.skip("L", CROPS, "sub-b")
+    script.skip("L", SKELETONS, "sub-c")
+
+    script.run()
+
+    message = _summary_of(script, "L", CROPS)
+    assert message.count("sub-a") == 1
+    assert "sub-b" in message
+    assert "sub-c" not in message
+
+
+def test_run_summary_states_each_cause(script):
+    """REQ-CTFAIL-BDRABCZUK-6397D61CF3A7: exc_type with message of each distinct cause, a repeat stated once."""
+    script.subjects("sub-a", "sub-b", "sub-c")
+    script.skip("R", CROPS, "sub-a", FileNotFoundError("no skeleton file"))
+    script.skip("R", CROPS, "sub-b", FileNotFoundError("no skeleton file"))
+    script.skip("R", CROPS, "sub-c", AssertionError("empty crop"))
+
+    script.run()
+
+    message = _summary_of(script, "R", CROPS)
+    assert "FileNotFoundError" in message
+    assert message.count("no skeleton file") == 1
+    assert "AssertionError" in message
+    assert "empty crop" in message
+
+
+def _empty_left_side(script):
+    """L keeps no valid subject through entries of two steps, R keeps sub-b with an entry on sub-a."""
+    script.subjects("sub-a", "sub-b")
+    script.skip("L", SKELETONS, "sub-a")
+    script.skip("L", CROPS, "sub-b")
+    script.skip("R", CROPS, "sub-a")
+
+
+def test_run_summary_states_empty_side_in_each_step_record(script):
+    """REQ-CTFAIL-BDRABCZUK-7D10357175DE: each step record of a side left empty says it keeps no valid subject."""
+    _empty_left_side(script)
+
+    script.run()
+
+    for step in (SKELETONS, CROPS):
+        assert NO_VALID_SUBJECT.search(_summary_of(script, "L", step))
+
+
+def test_run_summary_leaves_empty_side_statement_out_of_side_keeping_a_subject(script):
+    """REQ-CTFAIL-BDRABCZUK-7D10357175DE: the record of the side keeping a subject does not call it empty."""
+    _empty_left_side(script)
+
+    script.run()
+
+    assert not NO_VALID_SUBJECT.search(_summary_of(script, "R", CROPS))
+
+
+@pytest.mark.parametrize(
+    "lost_regions",
+    [pytest.param(("S.Or.",), id="lost-in-one-region"), pytest.param(("S.Or.", "OCCIPITAL"), id="lost-in-each-region")],
+)
+def test_run_summary_names_side_lost_without_skip_entry(script, lost_regions):
+    """REQ-CTFAIL-BDRABCZUK-309DB18C6C45: one record names the side, however many regions raised for it."""
+    script.subjects("sub-a", "sub-b")
+
+    def raise_on_left_side(cfg):
+        if cfg["side"] == "L" and cfg["region_name"] in lost_regions:
+            raise NoValidSubjectError("no subject of side L has both resampled volumes")
+
+    script.on_call = raise_on_left_side
+
+    script.run(regions=("S.Or.", "OCCIPITAL"))
+
+    assert len(script.calls) == 4
+    records = script.summary_records()
+    assert len(records) == 1
+    assert re.search(r"\bL\b", records[0])
+
+
+# --- exit code -------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        pytest.param([("L", "sub-a")], id="one-subject-on-one-side"),
+        pytest.param([("L", "sub-a"), ("R", "sub-a")], id="one-subject-on-both-sides"),
+        pytest.param([("L", "sub-a"), ("L", "sub-b")], id="one-side-emptied-the-other-valid"),
+        pytest.param([("L", "sub-a"), ("R", "sub-b")], id="each-side-keeps-a-subject"),
+    ],
+)
+def test_exit_code_3_when_skip_entry_leaves_a_valid_subject(script, entries):
+    """REQ-CTFAIL-BDRABCZUK-96FC3110E1A8: some subjects skipped, a valid one left on a side -> exit 3."""
+    script.subjects("sub-a", "sub-b")
+    for side, subject in entries:
+        script.skip(side, SKELETONS, subject)
+
+    assert script.run() == 3
+
+
+@pytest.mark.parametrize(
+    "subjects, entries",
+    [
+        pytest.param(("sub-a",), [("L", "sub-a"), ("R", "sub-a")], id="only-subject-skipped-on-both-sides"),
+        pytest.param(
+            ("sub-a", "sub-b"),
+            [("L", "sub-a"), ("L", "sub-b"), ("R", "sub-a"), ("R", "sub-b")],
+            id="each-subject-skipped-on-both-sides",
+        ),
+        pytest.param((), [], id="no-input-subject"),
+    ],
+)
+def test_exit_code_1_when_no_valid_subject_left(script, subjects, entries):
+    """REQ-CTFAIL-BDRABCZUK-4127B66C1D40: no side keeps a valid subject -> exit 1."""
+    script.subjects(*subjects)
+    for side, subject in entries:
+        script.skip(side, SKELETONS, subject)
+
+    assert script.run() == 1
+
+
+def test_exit_code_0_when_nothing_skipped(script):
+    """REQ-CTFAIL-BDRABCZUK-55C3DAD3DB34: no skip entry, a valid subject -> exit 0."""
+    script.subjects("sub-a")
+
+    assert script.run() == 0
+
+
+def test_exit_code_0_ignores_skip_entry_of_side_outside_sides(script):
+    """REQ-CTFAIL-BDRABCZUK-55C3DAD3DB34: an entry of a side the run left out does not count."""
+    script.subjects("sub-a")
+    script.skip("L", SKELETONS, "sub-a")
+
+    assert script.run(sides=("R",)) == 0
+
+
+def test_exit_code_1_on_escaping_exception_with_skip_entries(script):
+    """REQ-CTFAIL-BDRABCZUK-D42669337BCA: 1 stays the run-level failure, skip entries do not turn it into 3.
+
+    Guard: already true before this Task, it stops the partial code from masking a crash.
+    """
+    script.subjects("sub-a", "sub-b")
+    script.skip("L", SKELETONS, "sub-a")
+
+    def crash(_cfg):
+        raise RuntimeError("run-level failure")
+
+    script.on_call = crash
+
+    assert script.run() == 1
+
+
+def _no_valid_subject_on_call(script, call_number):
+    """The given call raises as the count check does: no entry recorded, the side lost."""
+
+    def on_call(_cfg):
+        if len(script.calls) == call_number:
+            raise NoValidSubjectError("no subject of side L has both resampled volumes")
+
+    return on_call
+
+
+@pytest.mark.parametrize(
+    "raising_call", [pytest.param(1, id="first-region-call"), pytest.param(4, id="last-region-call")]
+)
+def test_exit_code_3_when_no_valid_subject_error_leaves_no_skip_entry(script, raising_call):
+    """REQ-CTFAIL-BDRABCZUK-1D03DBFCB485: the raise alone gives 3, from any region, with no entry on any side."""
+    script.subjects("sub-a", "sub-b")
+    script.on_call = _no_valid_subject_on_call(script, raising_call)
+
+    exit_code = script.run(regions=("S.Or.", "OCCIPITAL"))
+
+    assert len(script.calls) == 4
+    assert load_skip_entries(script.output_dir, "L") == []
+    assert load_skip_entries(script.output_dir, "R") == []
+    assert exit_code == 3
+
+
+def test_exit_code_1_when_no_valid_subject_error_and_no_valid_subject_left(script):
+    """REQ-CTFAIL-BDRABCZUK-1D03DBFCB485, REQ-CTFAIL-BDRABCZUK-4127B66C1D40: no valid subject left, 1 outranks 3.
+
+    The call count tells the computed 1 from an exception escaping the loop.
+    """
+    script.subjects("sub-a")
+    script.skip("L", SKELETONS, "sub-a")
+    script.skip("R", SKELETONS, "sub-a")
+    script.on_call = _no_valid_subject_on_call(script, 1)
+
+    exit_code = script.run()
+
+    assert len(script.calls) == 2
+    assert exit_code == 1
+
+
+def test_valid_subject_leaves_out_non_subject_entry(script):
+    """REQ-CTFAIL-BDRABCZUK-EC7DF3FC4D5B: a graphs_dir entry refused by is_it_a_subject is no valid subject."""
+    script.subjects("sub-a")
+    (script.graphs_dir / "sub-b.minf").write_text("")
+    script.skip("L", SKELETONS, "sub-a")
+    script.skip("R", SKELETONS, "sub-a")
+
+    assert script.run() == 1
+
+
+def test_valid_subject_leaves_out_qc_rejected_subject(script, tmp_path):
+    """REQ-CTFAIL-BDRABCZUK-EC7DF3FC4D5B: a subject dropped by select_good_qc is no valid subject."""
+    script.subjects("sub-a", "sub-b")
+    qc_file = tmp_path / "qc.tsv"
+    qc_file.write_text("participant_id\tqc\nsub-a\t1\nsub-b\t0\n")
+    script.skip("L", SKELETONS, "sub-a")
+    script.skip("R", SKELETONS, "sub-a")
+
+    assert script.run(extra=("--sk_qc_path", str(qc_file))) == 1
+
+
+# --- a skip never stops the run --------------------------------------------------------------------
+
+
+def _skip_entry_on_first_call(script):
+    """The first call records one entry and returns."""
+
+    def on_call(_cfg):
+        if len(script.calls) == 1:
+            script.skip("L", SKELETONS, "sub-a")
+
+    return on_call
+
+
+def _no_valid_subject_on_left_side(script):
+    """Each call of L records the entries of that side, then raises as generate_crops does on an empty stack."""
+
+    def on_call(cfg):
+        if cfg["side"] == "L":
+            script.skip("L", CROPS, "sub-a")
+            script.skip("L", CROPS, "sub-b")
+            raise NoValidSubjectError("no subject left in the stack of side L")
+
+    return on_call
+
+
+@pytest.mark.parametrize(
+    "on_call_of",
+    [
+        pytest.param(_skip_entry_on_first_call, id="entry-recorded"),
+        pytest.param(_no_valid_subject_on_left_side, id="entries-recorded-then-no-valid-subject-raised"),
+    ],
+)
+def test_run_finishes_remaining_calls_after_recorded_skip(script, on_call_of):
+    """REQ-CTFAIL-BDRABCZUK-E9E61C41A160: a call recording a skip leaves the remaining calls of the run.
+
+    The raising case is the real risk: an uncaught NoValidSubjectError would stop the loop while R keeps a subject.
+    """
+    script.subjects("sub-a", "sub-b")
+    script.on_call = on_call_of(script)
+
+    exit_code = script.run(regions=("S.Or.", "OCCIPITAL"))
+
+    assert script.calls == [
+        ("S.Or.", "L", "skeleton"),
+        ("S.Or.", "R", "skeleton"),
+        ("OCCIPITAL", "L", "skeleton"),
+        ("OCCIPITAL", "R", "skeleton"),
+    ]
+    assert exit_code == 3
+
+
+# --- skip-list reset -------------------------------------------------------------------------------
+
+
+def test_clear_and_compute_empties_skip_list_before_first_region(script):
+    """REQ-CTFAIL-BDRABCZUK-107B7A11BBE7: clear_and_compute empties the list of each side in sides at run start."""
+    script.config["save_behavior"] = "clear_and_compute"
+    script.subjects("sub-a", "sub-b")
+    script.skip("L", SKELETONS, "sub-a")
+    script.skip("R", SKELETONS, "sub-b")
+    seen = []
+    script.on_call = lambda _cfg: seen.append(
+        (load_skip_entries(script.output_dir, "L"), load_skip_entries(script.output_dir, "R"))
+    )
+
+    script.run()
+
+    assert seen[0] == ([], [])
+
+
+def test_clear_and_compute_keeps_entry_recorded_during_the_run(script):
+    """REQ-CTFAIL-BDRABCZUK-107B7A11BBE7: the clear happens once per side, so an entry of the first region stays."""
+    script.config["save_behavior"] = "clear_and_compute"
+    script.subjects("sub-a", "sub-b")
+    script.skip("L", SKELETONS, "sub-b")
+
+    def skip_on_first_call(_cfg):
+        if len(script.calls) == 1:
+            script.skip("L", CROPS, "sub-a")
+
+    script.on_call = skip_on_first_call
+
+    assert script.run(regions=("S.Or.", "OCCIPITAL")) == 3
+    assert [entry.subject for entry in load_skip_entries(script.output_dir, "L")] == ["sub-a"]
+
+
+@pytest.mark.parametrize("save_behavior", ["best", "minimal"])
+def test_other_save_behavior_keeps_skip_entries(script, save_behavior):
+    """REQ-CTFAIL-BDRABCZUK-A031F9E35FF3: a normal rerun finds and keeps the entries of the previous run.
+
+    Guard: clear_skip_list has no caller yet, it stops the clear call from reaching a normal rerun.
+    """
+    script.config["save_behavior"] = save_behavior
+    script.subjects("sub-a", "sub-b")
+    script.skip("L", SKELETONS, "sub-a")
+
+    script.run()
+
+    assert [entry.subject for entry in load_skip_entries(script.output_dir, "L")] == ["sub-a"]
+
+
+@pytest.mark.parametrize("save_behavior", ["best", "clear_and_compute"])
+def test_side_outside_sides_keeps_its_skip_list(script, save_behavior):
+    """REQ-CTFAIL-BDRABCZUK-05D40790A955: a run limited to R leaves the list of L as it found it.
+
+    Guard: clear_skip_list has no caller yet, it stops the clear call from reaching a side the run left out.
+    """
+    script.config["save_behavior"] = save_behavior
+    script.subjects("sub-a", "sub-b")
+    script.skip("L", SKELETONS, "sub-a")
+
+    script.run(sides=("R",))
+
+    assert [entry.subject for entry in load_skip_entries(script.output_dir, "L")] == ["sub-a"]
+
+
+def test_skip_dir_is_the_resolved_output_dir(script):
+    """REQ-CTFAIL-BDRABCZUK-C77724B08161: a $local output_dir resolves to <dataset>/<-o> before skip lists are read."""
+    script.config["output_dir"] = "$local"
+    script.subjects("sub-a", "sub-b")
+    script.skip("L", SKELETONS, "sub-a", skip_dir=script.dataset / "out")
+
+    assert script.run(extra=("-o", "out")) == 3
