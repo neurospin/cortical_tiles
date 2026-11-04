@@ -39,6 +39,7 @@ Pipeline to build crops from morphologist graph
 import json
 import os
 import argparse
+import re
 import sys
 import shutil
 
@@ -52,6 +53,9 @@ from cortical_tiles.brainvisa.utils.logs import setup_log
 
 from cortical_tiles.brainvisa.utils.sulcus import complete_sulci_name
 from cortical_tiles.brainvisa.utils.folder import get_nth_parent_dir
+from cortical_tiles.brainvisa.utils.crop_subjects import NoValidSubjectError
+from cortical_tiles.brainvisa.utils.skip_list import SKIP_LIST_FILENAME, \
+    load_skipped
 
 from cortical_tiles.brainvisa.compute_mask import compute_mask
 from cortical_tiles.brainvisa.generate_crops import generate_crops
@@ -159,6 +163,44 @@ def is_step_to_be_computed(path, log_string, save_behavior='best'):
 def check_if_same_dim(arr, df):
     assert (arr.shape[0] == len(
         df)), "Number of subjects differs between numpy array and csv"
+
+
+def _resampled_subjects(side_dir, side, kind):
+    """Returns the subjects with a resampled ``kind`` volume in side_dir"""
+    if not os.path.isdir(side_dir):
+        return set()
+    pattern = re.compile(rf"^{side}resampled_{kind}_(.*)\.nii\.gz$")
+    matches = (pattern.match(name) for name in os.listdir(side_dir))
+    return {match.group(1) for match in matches if match}
+
+
+def check_if_number_skeletons_equals_number_foldlabels(
+        resampled_dir, skeleton_dir, side, skip_dir):
+    """Compares the resampled skeletons and foldlabels of one side
+
+    Subjects of the skip list of side are left out of both sets. Logs one
+    warning per subject holding only one of the two volumes.
+
+    Raises:
+        NoValidSubjectError: no subject has both resampled volumes.
+    """
+    skipped = load_skipped(skip_dir, side)
+    skeletons = _resampled_subjects(
+        os.path.join(skeleton_dir, side), side, "skeleton") - skipped
+    foldlabels = _resampled_subjects(
+        os.path.join(resampled_dir, f"{side}_before_masking"),
+        side, "foldlabel") - skipped
+    for subject in sorted(skeletons ^ foldlabels):
+        missing = "foldlabel" if subject in skeletons else "skeleton"
+        log.warning("Subject %s of side %s has no resampled %s volume",
+                    subject, side, missing)
+    if not skeletons & foldlabels:
+        skip_list = os.path.join(
+            skip_dir, SKIP_LIST_FILENAME.format(side=side))
+        raise NoValidSubjectError(
+            f"no subject of side {side} has both resampled volumes: "
+            f"{len(skeletons)} skeletons and {len(foldlabels)} foldlabels "
+            f"outside the skip list {skip_list}")
 
 
 def parse_args(argv: list) -> dict:
@@ -589,9 +631,10 @@ def run_with_params(params: dict):
             skeleton_dir = os.path.join(params['skeleton_dir'], vox_size)
             path_masked_path = os.path.join(masked_dir, params['side'])
 
-            # check_if_number_skeletons_equals_number_foldlabels(
-            #     resampled_dir, skeleton_dir
-            # )
+            if params['nb_subjects'] == -1:
+                check_if_number_skeletons_equals_number_foldlabels(
+                    resampled_dir, skeleton_dir, params['side'],
+                    params['output_dir'])
 
             if is_step_to_be_computed(
                     path=path_masked_path,
