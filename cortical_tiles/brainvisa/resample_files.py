@@ -74,6 +74,7 @@ from cortical_tiles.brainvisa.utils.quality_checks import \
     compare_number_aims_files_with_number_in_source, \
     get_not_processed_files, \
     save_list_to_csv
+from cortical_tiles.brainvisa.utils.skip_list import load_skipped, record_skip
 from cortical_tiles.config.logs import set_file_logger
 from soma import aims
 
@@ -91,6 +92,8 @@ _EXTREMITIES_FILENAME = "extremities_"
 _RESAMPLED_SKELETON_FILENAME = "resampled_skeleton_"
 _RESAMPLED_FOLDLABEL_FILENAME = "resampled_foldlabel_"
 _RESAMPLED_EXTREMITIES_FILENAME = "resampled_extremities_"
+
+_STEP = "resample_files"
 
 
 # Defines logger
@@ -291,7 +294,7 @@ class FileResampler:
 
     def __init__(self, src_dir, resampled_dir, transform_dir,
                  side, out_voxel_size, parallel,
-                 do_skel, immortals, srand=None
+                 do_skel, immortals, srand=None, skip_dir=None
                  ):
         """Inits with list of directories
 
@@ -302,9 +305,12 @@ class FileResampler:
             side: either 'L' or 'R', hemisphere side
             out_voxel_size: float giving voxel size in mm
             parallel: does parallel computation if True
+            skip_dir: directory of the per-side skip lists
+                (default: resampled_dir)
         """
         self.side = side
         self.parallel = parallel
+        self.skip_dir = resampled_dir if skip_dir is None else skip_dir
 
         # Names of files in function of dictionary: keys = 'subject' and 'side'
         # Src directory contains either 'R' or 'L' a subdirectory
@@ -366,20 +372,32 @@ class FileResampler:
 
         # Performs the resampling
         if os.path.exists(src_file):
-            try:
-                self.resample_one_subject(
-                    src_file=src_file,
-                    out_voxel_size=self.out_voxel_size,
-                    transform_file=transform_file,
-                    resampled_file=resampled_file,
-                    do_skel=self.do_skel,
-                    immortals=self.immortals,
-                    srand=self.srand)
-                # aims.write(resampled, resampled_file)
-            except Exception as e:
-                log.warning(f"[skip] subject {subject_id}: failed to resample {src_file}: {e}")
+            self.resample_one_subject(
+                src_file=src_file,
+                out_voxel_size=self.out_voxel_size,
+                transform_file=transform_file,
+                resampled_file=resampled_file,
+                do_skel=self.do_skel,
+                immortals=self.immortals,
+                srand=self.srand)
         else:
             raise FileNotFoundError(f"{src_file} not found")
+
+    def resample_one_subject_or_skip(self, subject_id):
+        """Resamples one subject; records it in the side's skip list when it fails.
+
+        Args:
+            subject_id: string giving the subject ID
+
+        Returns:
+            (subject_id, None) on success, (subject_id, message) on failure
+        """
+        try:
+            self.resample_one_subject_wrapper(subject_id)
+        except Exception as exc:
+            record_skip(self.skip_dir, self.side, _STEP, subject_id, exc)
+            return subject_id, str(exc)
+        return subject_id, None
 
     def compute(self, nb_subjects=_ALL_SUBJECTS):
         """Loops over nii files
@@ -415,6 +433,14 @@ class FileResampler:
                 list_all_subjects = [
                     re.search(self.expr, basename(dI))[1]
                     for dI in src_files]
+
+                # Leaves out the subjects already in the side's skip list
+                skipped = load_skipped(self.skip_dir, self.side)
+                list_not_processed_subjects = [
+                    s for s in list_not_processed_subjects
+                    if s not in skipped]
+                list_all_subjects = [
+                    s for s in list_all_subjects if s not in skipped]
             else:
                 raise NotADirectoryError(
                     f"{self.src_dir} doesn't exist or is not a directory")
@@ -433,15 +459,18 @@ class FileResampler:
                 if self.parallel:
                     log.info(
                         "PARALLEL MODE: subjects are in parallel")
-                    p_map(
-                        self.resample_one_subject_wrapper,
+                    results = p_map(
+                        self.resample_one_subject_or_skip,
                         list_subjects,
                         num_cpus=define_njobs())
                 else:
                     log.info(
                         "SERIAL MODE: subjects are scanned serially")
-                    for sub in list_subjects:
-                        self.resample_one_subject_wrapper(sub)
+                    results = [self.resample_one_subject_or_skip(sub)
+                               for sub in list_subjects]
+                for result in results:
+                    if isinstance(result, BaseException):
+                        raise result
             else:
                 list_subjects = []
                 log.info(
@@ -470,7 +499,8 @@ class SkeletonResampler(FileResampler):
 
     def __init__(self, src_dir, resampled_dir, transform_dir,
                  side, out_voxel_size, parallel, src_filename,
-                 output_filename, do_skel, immortals, srand=None
+                 output_filename, do_skel, immortals, srand=None,
+                 skip_dir=None
                  ):
         """Inits with list of directories
 
@@ -490,7 +520,8 @@ class SkeletonResampler(FileResampler):
             src_dir=src_dir, resampled_dir=resampled_dir,
             transform_dir=transform_dir, side=side,
             out_voxel_size=out_voxel_size, parallel=parallel,
-            do_skel=do_skel, immortals=immortals, srand=srand)
+            do_skel=do_skel, immortals=immortals, srand=srand,
+            skip_dir=skip_dir)
 
         # skeletonization parameters
         self.do_skel = do_skel
@@ -541,7 +572,7 @@ class FoldLabelResampler(FileResampler):
 
     def __init__(self, src_dir, resampled_dir, transform_dir,
                  side, out_voxel_size, parallel, src_filename,
-                 output_filename, do_skel, immortals
+                 output_filename, do_skel, immortals, skip_dir=None
                  ):
         """Inits with list of directories
 
@@ -561,7 +592,7 @@ class FoldLabelResampler(FileResampler):
             src_dir=src_dir, resampled_dir=resampled_dir,
             transform_dir=transform_dir, side=side,
             out_voxel_size=out_voxel_size, parallel=parallel,
-            do_skel=do_skel, immortals=immortals)
+            do_skel=do_skel, immortals=immortals, skip_dir=skip_dir)
 
         # Names of files in function of dictionary: keys = 'subject' and 'side'
         # Src directory contains either 'R' or 'L' a subdirectory
@@ -600,7 +631,7 @@ class ExtremitiesResampler(FileResampler):
 
     def __init__(self, src_dir, resampled_dir, transform_dir,
                  side, out_voxel_size, parallel, src_filename,
-                 output_filename, do_skel, immortals
+                 output_filename, do_skel, immortals, skip_dir=None
                  ):
         """Inits with list of directories
 
@@ -620,7 +651,7 @@ class ExtremitiesResampler(FileResampler):
             src_dir=src_dir, resampled_dir=resampled_dir,
             transform_dir=transform_dir, side=side,
             out_voxel_size=out_voxel_size, parallel=parallel,
-            do_skel=do_skel, immortals=immortals)
+            do_skel=do_skel, immortals=immortals, skip_dir=skip_dir)
 
         # Names of files in function of dictionary: keys = 'subject' and 'side'
         # Src directory contains either 'R' or 'L' a subdirectory
@@ -659,7 +690,7 @@ class DistMapResampler(FileResampler):
 
     def __init__(self, src_dir, resampled_dir, transform_dir,
                  side, out_voxel_size, parallel, src_filename,
-                 output_filename, do_skel, immortals
+                 output_filename, do_skel, immortals, skip_dir=None
                  ):
         """Inits with list of directories
         Args:
@@ -674,7 +705,7 @@ class DistMapResampler(FileResampler):
             src_dir=src_dir, resampled_dir=resampled_dir,
             transform_dir=transform_dir, side=side,
             out_voxel_size=out_voxel_size, parallel=parallel,
-            do_skel=do_skel, immortals=immortals)
+            do_skel=do_skel, immortals=immortals, skip_dir=skip_dir)
 
         # Names of files in function of dictionary: keys = 'subject' and 'side'
         # Src directory contains either 'R' or 'L' a subdirectory
@@ -776,6 +807,10 @@ def parse_args(argv):
         help='VipSkeleton seed for skeleton re-skeletonization '
              '(default: None, clock-based seed).')
     parser.add_argument(
+        "--skip_dir", type=str, default=None,
+        help='Directory of the per-side skip lists '
+             'skip_list_<side>.jsonl. Default: the output directory.')
+    parser.add_argument(
         '-v', '--verbose', action='count', default=0,
         help='Verbose mode: '
         'If no option is provided then logging.INFO is selected. '
@@ -803,6 +838,7 @@ def parse_args(argv):
     params['src_filename'] = args.src_filename
     params['output_filename'] = args.output_filename
     params['skel_seed'] = args.skel_seed
+    params['skip_dir'] = args.skip_dir
 
     return params
 
@@ -818,7 +854,8 @@ def resample_files(
         nb_subjects=_ALL_SUBJECTS,
         src_filename=_SKELETON_FILENAME,
         output_filename=_RESAMPLED_SKELETON_FILENAME,
-        skel_seed=None):
+        skel_seed=None,
+        skip_dir=None):
 
     if input_type == "skeleton":
         src_filename = (_SKELETON_FILENAME
@@ -838,7 +875,8 @@ def resample_files(
             output_filename=output_filename,
             do_skel=True,
             immortals=[30, 50, 80, 35, 110, 120],
-            srand=skel_seed)
+            srand=skel_seed,
+            skip_dir=skip_dir)
     elif input_type == "foldlabel":
         src_filename = (_FOLDLABEL_FILENAME
                         if src_filename is None
@@ -856,7 +894,8 @@ def resample_files(
             src_filename=src_filename,
             output_filename=output_filename,
             do_skel=False,
-            immortals=[])
+            immortals=[],
+            skip_dir=skip_dir)
     elif input_type == "extremities":
         src_filename = (_EXTREMITIES_FILENAME
                         if src_filename is None
@@ -874,7 +913,8 @@ def resample_files(
             src_filename=src_filename,
             output_filename=output_filename,
             do_skel=False,
-            immortals=[])
+            immortals=[],
+            skip_dir=skip_dir)
     elif input_type == "distmap":
         resampler = DistMapResampler(
             src_dir=src_dir,
@@ -886,7 +926,8 @@ def resample_files(
             src_filename=src_filename,
             output_filename=output_filename,
             do_skel=False,
-            immortals=[])
+            immortals=[],
+            skip_dir=skip_dir)
     else:
         raise ValueError(
             "input_type: shall be either 'skeleton', 'foldlabel',"
