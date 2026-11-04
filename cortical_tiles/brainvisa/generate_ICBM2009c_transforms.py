@@ -50,9 +50,11 @@ import argparse
 import glob
 import sys
 import re
+from os import sep
 from os.path import abspath
 from os.path import basename
 from os.path import exists
+from os.path import relpath
 
 from cortical_tiles.brainvisa import exception_handler
 from cortical_tiles.brainvisa.utils.folder import create_folder
@@ -66,7 +68,7 @@ from cortical_tiles.brainvisa.utils.quality_checks import \
     compare_number_aims_files_with_expected, \
     get_not_processed_subjects_transform
 from cortical_tiles.brainvisa.utils.skip_list import \
-    load_skipped, record_skip, session_key
+    covered_by, load_skipped, record_skip, session_key
 from pqdm.processes import pqdm
 from cortical_tiles.config.logs import set_file_logger
 from soma import aims
@@ -210,7 +212,9 @@ class GraphGenerateTransform:
         graph_path = f"{self.src_dir}/{subject}*/" +\
                      f"{self.path_to_graph}/{self.side}*.arg"
         log.debug(graph_path)
-        list_graph_file = glob.glob(graph_path)
+        list_graph_file = [
+            graph_file for graph_file in glob.glob(graph_path)
+            if covered_by(self._subject_folder(graph_file), {subject})]
         log.debug(f"list_graph_file = {list_graph_file}")
         if not list_graph_file:
             exc = FileNotFoundError(
@@ -236,6 +240,10 @@ class GraphGenerateTransform:
             if not self.bids:
                 break
         return (subject, first_failure)
+
+    def _subject_folder(self, graph_file):
+        """Returns the first path part of ``graph_file`` under src_dir."""
+        return relpath(graph_file, self.src_dir).split(sep)[0]
 
     def get_transform_filename(self, subject, graph_file):
         return get_transform_filename(
