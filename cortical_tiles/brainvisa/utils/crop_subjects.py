@@ -7,6 +7,11 @@ of one input type only, ``restrict_stack`` drops excluded subjects from a
 stacked array and its CSV, ``collect_failed_subjects`` reads the failures out
 of the crop worker results, and ``check_stack_has_subjects`` raises
 ``NoValidSubjectError`` when a stack holds no subject.
+
+A subject with an all-zero skeleton crop leaves the whole run:
+``exclude_empty_rows`` finds it in the skeleton stack, ``mirror_empty_crops``
+copies its entry to each side of the run, and ``exclude_empty_crops`` takes it
+out of the stacks and cropped files of each region and side of the run.
 """
 
 import os
@@ -16,11 +21,24 @@ from os.path import abspath, basename, dirname, join
 import numpy as np
 import pandas as pd
 
-from cortical_tiles.brainvisa.utils.skip_list import record_skip
+from cortical_tiles.brainvisa.utils.skip_list import SKIP_SIDES, load_skip_entries, record_skip
+
+# Named set "run stacks": (stack, sample directory, cropped file kind)
+_RUN_STACKS = (
+    ("skeleton", "crops", "skeleton"),
+    ("label", "labels", "foldlabel"),
+    ("extremities", "extremities", "extremities"),
+    ("distmap", "distmaps", "distmap"),
+    ("distbottom", "distbottom", "distbottom"),
+)
 
 
 class NoValidSubjectError(RuntimeError):
     """No subject of a side is left in its stacked crop array"""
+
+
+class EmptyCropError(ValueError):
+    """The skeleton crop of a subject holds only zero voxels"""
 
 
 def collect_failed_subjects(results):
@@ -123,3 +141,73 @@ def record_one_sided_subjects(src_dir, side, skip_dir, step, excluded):
             f"no resampled {missing} file of side {side} for subject "
             f"{subject} (searched {side_dirs[missing]})"))
     return one_sided
+
+
+def remove_crop_file(path):
+    """Deletes a cropped file and its .minf sidecar, each when present"""
+    for name in (path, f"{path}.minf"):
+        if os.path.exists(name):
+            os.remove(name)
+
+
+def exclude_empty_rows(crop_dir, side, skip_dir, step, cropped_path):
+    """Records, deletes and drops the subjects with an all-zero skeleton row
+
+    Returns the set of those subjects.
+    """
+    file_basename = f"{side}skeleton"
+    subjects = pd.read_csv(
+        join(crop_dir, f"{file_basename}_subject.csv"), dtype=str)["Subject"]
+    rows = np.load(join(crop_dir, f"{file_basename}.npy"))
+    empty = {subject for subject, row in zip(subjects, rows, strict=True)
+             if not row.any()}
+    for subject in sorted(empty):
+        remove_crop_file(cropped_path(subject))
+        record_skip(skip_dir, side, step, subject,
+                    EmptyCropError(f"empty crop in {crop_dir}"))
+    restrict_stack(crop_dir, file_basename, empty, write_sub_id=True)
+    return empty
+
+
+def mirror_empty_crops(skip_dir, sides):
+    """Gives each side in sides an entry per empty crop; returns the subjects
+
+    Reads the lists of every side, writes only to the sides in ``sides``.
+    """
+    found = {}
+    for side in SKIP_SIDES:
+        for entry in load_skip_entries(skip_dir, side):
+            if entry.exc_type == EmptyCropError.__name__:
+                found.setdefault(entry.subject, entry)
+    for side in sides:
+        listed = {(entry.subject, entry.step)
+                  for entry in load_skip_entries(skip_dir, side)}
+        for subject, entry in sorted(found.items()):
+            if (subject, entry.step) not in listed:
+                record_skip(skip_dir, side, entry.step, subject,
+                            EmptyCropError(f"{entry.message} (opposite side)"))
+    return set(found)
+
+
+def _exclude_from_side(crop_dir, side, subjects):
+    """Drops the subjects from the stacks of a side and deletes their files"""
+    for stack, sample_dir, kind in _RUN_STACKS:
+        restrict_stack(crop_dir, f"{side}{stack}", subjects)
+        for subject in subjects:
+            remove_crop_file(join(crop_dir, f"{side}{sample_dir}",
+                                  f"{subject}_cropped_{kind}.nii.gz"))
+    pickle_file = join(crop_dir, f"{side}distbottom.pkl")
+    if os.path.isfile(pickle_file):
+        pd.read_pickle(pickle_file).drop(
+            columns=list(subjects), errors="ignore").to_pickle(pickle_file)
+
+
+def exclude_empty_crops(crop_dirs, subjects, sides):
+    """Drops the subjects from each crop_dir and side, sub_id.npy included"""
+    for crop_dir in crop_dirs:
+        for side in sides:
+            _exclude_from_side(crop_dir, side, subjects)
+        sub_id_file = join(crop_dir, "sub_id.npy")
+        if os.path.isfile(sub_id_file):
+            ids = np.load(sub_id_file)
+            np.save(sub_id_file, ids[~np.isin(ids, list(subjects))])

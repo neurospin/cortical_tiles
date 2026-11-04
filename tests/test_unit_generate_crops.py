@@ -797,3 +797,124 @@ def test_record_skip_failure_is_propagated(tmp_path, parallel):
             _crop_in_mode(tmp_path, out, "skeleton", parallel, skip_dir=read_only)
     finally:
         read_only.chmod(0o700)
+
+
+# --- TASK-CTFAIL-BDRABCZUK-CADDE061C615: empty skeleton crops (DEF-CTFAIL-BDRABCZUK-B41A05EDC9DA) ---------------------
+# EMPTY's skeleton is not an empty volume: its only voxel lies outside the crop box, so the crop alone is all zeros.
+# The skip list holding the entry is found by search; test_unit_empty_crop_run.py pins it to skip_dir.
+
+EMPTY = "b2"
+KEPT = ["a1", "c3"]
+
+
+def _source_path(out, kind, subject, side=SIDE):
+    return out / KIND_DIRS[kind] / "2mm" / side / f"{side}resampled_{kind}_{subject}.nii.gz"
+
+
+def _empty_crop_layout(tmp_path, *kinds):
+    """Layout of a1, EMPTY and c3; the skeleton and foldlabel of EMPTY hold one voxel outside the crop box."""
+    kinds = {"skeleton", *kinds}
+    out = _subject_set_layout(tmp_path, **{kind: ("a1", EMPTY, "c3") for kind in kinds})
+    outside = np.zeros(SHAPE, dtype=np.int16)
+    outside[8, 10, 12, 0] = 100
+    for kind in kinds & {"skeleton", "foldlabel"}:
+        _write_volume(_source_path(out, kind, EMPTY), outside)
+    return out
+
+
+def _skip_entries(tmp_path, side=SIDE):
+    """Entries of each skip list of the side found under tmp_path."""
+    paths = sorted(tmp_path.rglob(f"skip_list_{side}.jsonl"))
+    return [entry for path in paths for entry in skip_list.load_skip_entries(skip_dir=str(path.parent), side=side)]
+
+
+@pytest.mark.parametrize("parallel", MODES)
+def test_empty_crop_is_recorded_through_record_skip(tmp_path, parallel):
+    """REQ-CTFAIL-BDRABCZUK-888FC88435C3: one entry of the subject, step generate_crops, reason empty crop, on its
+    side only."""
+    out = _empty_crop_layout(tmp_path)
+
+    _crop_in_mode(tmp_path, out, "skeleton", parallel)
+
+    entries = _skip_entries(tmp_path)
+    assert [(entry.subject, entry.step) for entry in entries] == [(EMPTY, STEP)]
+    assert "empty crop" in entries[0].message
+    assert _skip_entries(tmp_path, "L") == []
+
+
+def test_empty_crop_logs_error_naming_subject_and_side(tmp_path, caplog):
+    """REQ-CTFAIL-BDRABCZUK-888FC88435C3: going through record_skip gives the ERROR record of the failure rule."""
+    out = _empty_crop_layout(tmp_path)
+    caplog.set_level(logging.ERROR)
+
+    _crop(tmp_path, out, "skeleton")
+
+    messages = [record.getMessage() for record in caplog.records if record.levelno == logging.ERROR]
+    assert [message for message in messages if EMPTY in message and "empty crop" in message and SIDE in message]
+
+
+def test_empty_crop_message_names_the_crop_dir(tmp_path):
+    """REQ-CTFAIL-BDRABCZUK-2E1E91D69E70: an entry has no region key, so its message tells which region was empty."""
+    out = _empty_crop_layout(tmp_path)
+
+    _crop(tmp_path, out, "skeleton")
+
+    assert [str(tmp_path / "crops") in entry.message for entry in _skip_entries(tmp_path)] == [True]
+
+
+@pytest.mark.parametrize("parallel", MODES)
+def test_empty_crop_leaves_subject_out_of_the_skeleton_stack(tmp_path, parallel):
+    """REQ-CTFAIL-BDRABCZUK-F2F84BDAA1F6: example reproducing DEF-CTFAIL-BDRABCZUK-B41A05EDC9DA: the all-zero crop
+    was stacked as an ordinary subject."""
+    out = _empty_crop_layout(tmp_path)
+
+    _crop_in_mode(tmp_path, out, "skeleton", parallel)
+
+    assert _stacked_subjects(tmp_path, "skeleton") == KEPT
+
+
+@pytest.mark.parametrize("input_type", ["foldlabel", "extremities", "distmap"])
+def test_empty_crop_leaves_subject_out_of_the_later_stacks(tmp_path, input_type):
+    """REQ-CTFAIL-BDRABCZUK-726AA9433848: the later passes of the region follow the skeleton pass, so the stacks stay
+    aligned; the extremities and distmap volumes of the subject are not empty."""
+    out = _empty_crop_layout(tmp_path, input_type)
+
+    _crop(tmp_path, out, "skeleton")
+    _crop(tmp_path, out, input_type)
+
+    assert _stacked_subjects(tmp_path, input_type) == KEPT
+
+
+def test_empty_crop_deletes_the_cropped_file(tmp_path):
+    """REQ-CTFAIL-BDRABCZUK-86FBC52CFA55: generate_distbottom_crops stacks the subjects found among these files."""
+    out = _empty_crop_layout(tmp_path)
+
+    _crop(tmp_path, out, "skeleton")
+
+    assert _cropped_subjects(tmp_path, "skeleton") == KEPT
+
+
+def test_non_zero_skeleton_voxel_keeps_subject_in_the_stacks(tmp_path):
+    """REQ-CTFAIL-BDRABCZUK-1823CE233AA2: regression guard, passes in red: one voxel in the skeleton crop is enough,
+    and an all-zero extremities crop alone drops nobody."""
+    out = _subject_set_layout(tmp_path, skeleton=("a1", EMPTY), extremities=("a1", EMPTY))
+    one_voxel = np.zeros(SHAPE, dtype=np.int16)
+    one_voxel[3, 4, 5, 0] = 30
+    _write_volume(_source_path(out, "skeleton", EMPTY), one_voxel)
+    _write_volume(_source_path(out, "extremities", EMPTY), np.zeros(SHAPE, dtype=np.int16))
+
+    _crop(tmp_path, out, "skeleton")
+    _crop(tmp_path, out, "extremities")
+
+    assert _stacked_subjects(tmp_path, "skeleton") == ["a1", EMPTY]
+    assert _stacked_subjects(tmp_path, "extremities") == ["a1", EMPTY]
+
+
+def test_empty_crop_rerun_keeps_one_entry(tmp_path):
+    """REQ-CTFAIL-BDRABCZUK-54E5B1BC53D6: a deterministic exclusion is recorded once, as the skip-list contract says."""
+    out = _empty_crop_layout(tmp_path)
+
+    _crop(tmp_path, out, "skeleton")
+    _crop(tmp_path, out, "skeleton")
+
+    assert [entry.subject for entry in _skip_entries(tmp_path)] == [EMPTY]
