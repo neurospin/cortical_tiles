@@ -363,7 +363,7 @@ def main(argv):
         bids=params['bids'],
         parallel=params['parallel'],
         nb_subjects=params['nb_subjects'],
-        qc_path=params['quality_checks'])
+        qc_path=params['qc_path'])
 
 
 if __name__ == '__main__':
