@@ -57,7 +57,8 @@ from cortical_tiles.brainvisa.utils.save_data import save_to_numpy
 from cortical_tiles.brainvisa.utils.save_data import \
     save_to_dataframe_format_from_list
 from cortical_tiles.brainvisa.utils.folder import create_folder
-from cortical_tiles.brainvisa.utils.crop_subjects import restrict_stack
+from cortical_tiles.brainvisa.utils.crop_subjects import \
+    cropped_subjects, qc_removed_subjects, restrict_stack
 from cortical_tiles.brainvisa.utils.skip_list import load_skipped
 from cortical_tiles.brainvisa.utils.logs import LogJson
 from cortical_tiles.brainvisa.utils.logs import setup_log
@@ -77,6 +78,7 @@ from cortical_tiles.config.logs import set_file_logger
 from cortical_tiles.brainvisa.utils.constants import \
     _ALL_SUBJECTS, \
     _CROP_DIR_DEFAULT, \
+    _QC_PATH_DEFAULT, \
     _SIDE_DEFAULT
 
 # Defines logger
@@ -386,21 +388,28 @@ def parse_args(argv):
     return params
 
 
-def generate_distbottom_crops(  # noqa: PLR0913 - skip_dir is required by the contract
+def generate_distbottom_crops(  # noqa: PLR0913 - skip_dir and qc_path are required by the contract
         src_dir=_CROP_DIR_DEFAULT,
         crop_dir=_CROP_DIR_DEFAULT,
         side=_SIDE_DEFAULT,
         nb_subjects=_ALL_SUBJECTS,
         parallel=False,
-        skip_dir=None
+        skip_dir=None,
+        qc_path=_QC_PATH_DEFAULT
         ):
 
     # Gets function arguments and values
     params = locals()
     nb_subjects = params.pop('nb_subjects')
     params.pop('skip_dir')
+    params.pop('qc_path')
     skip_dir = crop_dir if skip_dir is None else skip_dir
-    params['excluded_subjects'] = frozenset(load_skipped(skip_dir, side))
+    excluded = set(load_skipped(skip_dir, side))
+    if nb_subjects:
+        excluded |= qc_removed_subjects(
+            qc_path, cropped_subjects(src_dir, side, "skeleton")
+            | cropped_subjects(crop_dir, side, "distbottom"))
+    params['excluded_subjects'] = frozenset(excluded)
 
     # Initialization with same arguments and values as function
     crop = DistBottomCropGenerator(**params)

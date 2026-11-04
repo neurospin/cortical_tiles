@@ -62,9 +62,10 @@ import scipy.ndimage
 from cortical_tiles.brainvisa import exception_handler
 from cortical_tiles.brainvisa.utils.save_data import save_to_numpy
 from cortical_tiles.brainvisa.utils.crop_subjects import \
-    check_stack_has_subjects, collect_failed_subjects, exclude_empty_rows, \
-    quality_checks, quality_checks_extremities, \
-    record_one_sided_subjects, restrict_stack
+    check_stack_has_subjects, collect_failed_subjects, crop_subject_keys, \
+    exclude_empty_rows, qc_removed_subjects, quality_checks, \
+    quality_checks_extremities, record_one_sided_subjects, \
+    record_stale_crop_subjects, restrict_stack, stale_crop_subjects
 from cortical_tiles.brainvisa.utils.skip_list import load_skipped, record_skip
 from cortical_tiles.brainvisa.utils.bbox import compute_max_box
 from cortical_tiles.brainvisa.utils.folder import create_folder
@@ -95,7 +96,7 @@ from cortical_tiles.brainvisa.utils.constants import \
     _COMBINE_TYPE_DEFAULT, _INPUT_TYPE_DEFAULT, \
     _SULCUS_DEFAULT, _NO_MASK_DEFAULT, \
     _DILATION_DEFAULT, _THRESHOLD_DEFAULT, \
-    _NB_JOBS_DEFAULT
+    _NB_JOBS_DEFAULT, _QC_PATH_DEFAULT
 
 # Defines logger
 log = set_file_logger(__file__)
@@ -896,7 +897,8 @@ def generate_crops(
         threshold=_THRESHOLD_DEFAULT,
         dilation=_DILATION_DEFAULT,
         njobs=_NB_JOBS_DEFAULT,
-        skip_dir=None
+        skip_dir=None,
+        qc_path=_QC_PATH_DEFAULT
 
 ):
 
@@ -904,12 +906,20 @@ def generate_crops(
     params = locals()
     params.pop('nb_subjects')
     params.pop('input_type')
+    params.pop('qc_path')
     skip_dir = crop_dir if skip_dir is None else skip_dir
     params['skip_dir'] = skip_dir
     excluded = set(load_skipped(skip_dir, side))
+    if nb_subjects:
+        excluded |= qc_removed_subjects(qc_path, crop_subject_keys(
+            src_dir, crop_dir, side, input_type,
+            _EARLIER_STACKS.get(input_type, ())))
     if input_type == "foldlabel" and nb_subjects:
         excluded |= record_one_sided_subjects(src_dir, side, skip_dir,
                                               _STEP, excluded)
+        excluded |= record_stale_crop_subjects(
+            stale_crop_subjects(src_dir, crop_dir, side), side, skip_dir,
+            _STEP, excluded)
     params['excluded_subjects'] = frozenset(excluded)
 
     if input_type == "skeleton":

@@ -12,6 +12,13 @@ A subject with an all-zero skeleton crop leaves the whole run:
 ``exclude_empty_rows`` finds it in the skeleton stack, ``mirror_empty_crops``
 copies its entry to each side of the run, and ``exclude_empty_crops`` takes it
 out of the stacks and cropped files of each region and side of the run.
+
+A subject QC removes stays in memory, with no skip-list entry:
+``crop_subject_keys`` and ``cropped_subjects`` list the keys a step can meet,
+``qc_removed_subjects`` keeps those that pass QC by themselves or by their
+``subject_form``. A subject QC keeps with one stale crop and no resampled file
+is found by ``stale_crop_subjects`` and skip-listed by
+``record_stale_crop_subjects``.
 """
 
 import os
@@ -22,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 from cortical_tiles.brainvisa.utils.skip_list import SKIP_SIDES, load_skip_entries, record_skip
+from cortical_tiles.brainvisa.utils.subjects import select_good_qc
 
 # Named set "run stacks": (stack, sample directory, cropped file kind)
 _RUN_STACKS = (
@@ -31,6 +39,9 @@ _RUN_STACKS = (
     ("distmap", "distmaps", "distmap"),
     ("distbottom", "distbottom", "distbottom"),
 )
+_SAMPLE_DIRS = {kind: sample_dir for _, sample_dir, kind in _RUN_STACKS}
+# Named set "session parts": the suffixes get_skeleton_filename appends
+_SESSION_PARTS = re.compile(r"(_(ses|acq|run)-[^_/]+)+$")
 
 
 class NoValidSubjectError(RuntimeError):
@@ -122,18 +133,37 @@ def restrict_stack(crop_dir, file_basename, excluded, write_sub_id=False):
         np.save(join(crop_dir, "sub_id.npy"), subjects[keep].tolist())
 
 
+def _subjects_in(folder, expr):
+    """Returns the first group of expr over the file names of a folder
+
+    A missing folder holds no subject.
+    """
+    if not os.path.isdir(folder):
+        return set()
+    return {m[1] for m in map(expr.search, os.listdir(folder)) if m}
+
+
+def _resampled_subjects(side_dir, side, kind):
+    """Returns the subjects of the resampled files of a kind in side_dir"""
+    return _subjects_in(
+        side_dir, re.compile(rf"^{side}resampled_{kind}_(.*)\.nii\.gz$"))
+
+
+def _resampled_side_dirs(src_dir, side):
+    """Returns {kind: folder} of the resampled skeletons and foldlabels"""
+    src_dir = abspath(src_dir)
+    return {"foldlabel": join(src_dir, side), "skeleton": join(
+        dirname(dirname(src_dir)), "skeletons", basename(src_dir), side)}
+
+
 def record_one_sided_subjects(src_dir, side, skip_dir, step, excluded):
     """Records and returns the one-sided subjects not yet in excluded"""
-    src_dir = abspath(src_dir)
-    side_dirs = {"foldlabel": join(src_dir, side), "skeleton": join(
-        dirname(dirname(src_dir)), "skeletons", basename(src_dir), side)}
+    side_dirs = _resampled_side_dirs(src_dir, side)
     found = {}
     for kind, side_dir in side_dirs.items():
         if not os.path.isdir(side_dir):
             raise NotADirectoryError(f"{side_dir} is not a directory")
-        expr = re.compile(rf"^{side}resampled_{kind}_(.*)\.nii\.gz$")
-        found[kind] = {m[1] for m in map(expr.search, os.listdir(side_dir))
-                       if m}
+        found[kind] = _resampled_subjects(side_dir, side, kind)
     one_sided = (found["skeleton"] ^ found["foldlabel"]) - set(excluded)
     for subject in sorted(one_sided):
         missing = "foldlabel" if subject in found["skeleton"] else "skeleton"
@@ -141,6 +171,72 @@ def record_one_sided_subjects(src_dir, side, skip_dir, step, excluded):
             f"no resampled {missing} file of side {side} for subject "
             f"{subject} (searched {side_dirs[missing]})"))
     return one_sided
+
+
+def subject_form(key):
+    """Returns a subject key without its trailing session parts"""
+    return _SESSION_PARTS.sub("", key)
+
+
+def qc_removed_subjects(qc_path, keys):
+    """Returns the keys that QC keeps neither by themselves nor by their form
+
+    An empty qc_path keeps every key.
+    """
+    forms = {key: subject_form(key) for key in keys}
+    kept = set(select_good_qc(sorted({*forms, *forms.values()}), qc_path))
+    return {key for key, form in forms.items()
+            if key not in kept and form not in kept}
+
+
+def cropped_subjects(crop_dir, side, kind):
+    """Returns the subjects having a cropped file of a kind on a side"""
+    return _subjects_in(join(crop_dir, f"{side}{_SAMPLE_DIRS[kind]}"),
+                        re.compile(rf"^(.*)_cropped_{kind}\.nii\.gz$"))
+
+
+def crop_subject_keys(src_dir, crop_dir, side, input_type, earlier_stacks):
+    """Returns each subject key a crop pass of input_type can meet
+
+    Resampled files, cropped files of every kind (a subject whose resampled
+    file is gone is named only there) and the CSVs of earlier_stacks.
+    """
+    keys = _resampled_subjects(join(src_dir, side), side, input_type)
+    if input_type == "foldlabel":
+        keys |= _resampled_subjects(
+            _resampled_side_dirs(src_dir, side)["skeleton"], side, "skeleton")
+    for kind in _SAMPLE_DIRS:
+        keys |= cropped_subjects(crop_dir, side, kind)
+    for stack in earlier_stacks:
+        csv_file = join(crop_dir, f"{side}{stack}_subject.csv")
+        if os.path.isfile(csv_file):
+            keys |= set(pd.read_csv(csv_file, dtype=str)["Subject"])
+    return keys
+
+
+def stale_crop_subjects(src_dir, crop_dir, side):
+    """Returns {subject: kind held} of the subjects left with one stale crop
+
+    Such a subject has a cropped file of one kind in {skeleton, foldlabel}
+    and no resampled file of these kinds.
+    """
+    resampled = set()
+    for kind, side_dir in _resampled_side_dirs(src_dir, side).items():
+        resampled |= _resampled_subjects(side_dir, side, kind)
+    skeletons = cropped_subjects(crop_dir, side, "skeleton")
+    foldlabels = cropped_subjects(crop_dir, side, "foldlabel")
+    return {subject: "skeleton" if subject in skeletons else "foldlabel"
+            for subject in (skeletons ^ foldlabels) - resampled}
+
+
+def record_stale_crop_subjects(stale, side, skip_dir, step, excluded):
+    """Records and returns the subjects of stale not yet in excluded"""
+    recorded = set(stale) - set(excluded)
+    for subject in sorted(recorded):
+        record_skip(skip_dir, side, step, subject, FileNotFoundError(
+            f"only a cropped {stale[subject]} file of side {side} is left "
+            f"for subject {subject}: no resampled file"))
+    return recorded
 
 
 def remove_crop_file(path):

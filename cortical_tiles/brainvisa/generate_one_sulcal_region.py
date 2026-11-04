@@ -756,7 +756,8 @@ def run_with_params(params: dict):
             'threshold': params['threshold'],
             'dilation': params['dilation'],
             'njobs': params['njobs'],
-            'skip_dir': params['output_dir']}
+            'skip_dir': params['output_dir'],
+            'qc_path': params.get('skel_qc_path', '')}
 
         setup_log(Namespace(**{'verbose': log.level, **args_generate_crops}),
                   log_dir=f"{args_generate_crops['crop_dir']}",
@@ -798,7 +799,8 @@ def run_with_params(params: dict):
                 'side': params['side'],
                 'parallel': params['parallel'],
                 'nb_subjects': params['nb_subjects'],
-                'skip_dir': params['output_dir']}
+                'skip_dir': params['output_dir'],
+                'qc_path': params.get('skel_qc_path', '')}
 
             setup_log(
                 Namespace(**{'verbose': log.level,
