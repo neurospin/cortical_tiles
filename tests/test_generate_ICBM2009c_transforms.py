@@ -13,6 +13,9 @@ Called without ``skip_dir`` (a standalone run), the step falls back to its own `
 The graph files are empty placeholders ``<src>/<subject>/<path_to_graph>/<side><subject>.arg`` and the
 module's ``aims`` reference is replaced by a fake whose ``read`` raises for BAD_SUBJECT, so no real
 graph is needed. Each test names the behaviour it verifies.
+
+The command line ``main(argv)`` hands the parsed ``--qc_path`` value to the step as ``qc_path``
+(TASK-CTFAIL-BDRABCZUK-117FD2B69621, DEF-CORTILES-BDRABCZUK-F336E296FF77).
 """
 
 import inspect
@@ -324,3 +327,43 @@ def test_without_skip_dir_subject_in_transform_dir_skip_list_is_not_processed(la
     assert skipped not in _read_subjects(fake_aims)
     assert not _transform_file(layout, skipped).exists()
     assert _transform_file(layout, GOOD_SUBJECTS[0]).is_file()
+
+
+def _record_step_calls(monkeypatch):
+    """Replaces the step ``main`` calls by a recorder; returns the keyword arguments of each call."""
+    calls = []
+    monkeypatch.setattr(gt, "generate_ICBM2009c_transforms", lambda **kwargs: calls.append(kwargs))
+    return calls
+
+
+def _main_argv(layout, *options):
+    return ["-s", str(layout.src), "-o", str(layout.transform_dir), "-i", SIDE, "-p", PATH_TO_GRAPH, *options]
+
+
+def test_main_passes_the_parsed_qc_path_option_to_the_transform_generation(layout, monkeypatch):
+    calls = _record_step_calls(monkeypatch)
+    qc_path = str(layout.output_dir / "qc.tsv")
+
+    gt.main(_main_argv(layout, "--qc_path", qc_path))
+
+    assert [call["qc_path"] for call in calls] == [qc_path]
+
+
+def test_main_without_qc_path_option_passes_the_parser_default(layout, monkeypatch):
+    calls = _record_step_calls(monkeypatch)
+
+    gt.main(_main_argv(layout))
+
+    assert [call["qc_path"] for call in calls] == [gt._QC_PATH_DEFAULT]
+
+
+def test_command_line_run_leaves_out_the_subject_the_qc_file_rejects(layout, fake_aims):
+    accepted, rejected = GOOD_SUBJECTS
+    _make_graphs(layout.src, GOOD_SUBJECTS)
+    qc_file = layout.output_dir / "qc.tsv"
+    qc_file.write_text(f"participant_id\tqc\n{accepted}\t1\n{rejected}\t0\n")
+
+    gt.main(_main_argv(layout, "--qc_path", str(qc_file)))
+
+    assert _read_subjects(fake_aims) == {accepted}
+    assert _transform_file(layout, accepted).exists()
