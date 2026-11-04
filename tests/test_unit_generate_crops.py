@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from cortical_tiles.brainvisa import generate_crops as gc
+from cortical_tiles.brainvisa.utils import skip_list
 from soma import aims
 
 SIDE = "R"
@@ -312,3 +313,199 @@ def test_extremities_quality_checks_reject_inconsistent_arrays(tmp_path, defect)
     _write_qc_case(str(tmp_path), "extremities", skeleton, extremities, skeleton_subjects, extremities_subjects)
     with pytest.raises(AssertionError):
         gc.quality_checks_extremities(str(tmp_path), SIDE)
+
+
+# --- TASK-CTFAIL-BDRABCZUK-8B4393E2F8A2: crop subject set of a side -------------------------------
+# Layout mirrors run_with_params: <out>/<kind dir>/2mm/<side>/<side>resampled_<kind>_<s>.nii.gz; the one
+# shared per-side skip list lies in the skip_dir passed to generate_crops (<out> unless a test says otherwise).
+# Each test crops into one crop_dir, skeleton pass first, as generate_sulcal_regions does for one region and side.
+
+SEEDS = {"a1": 0, "b2": 1, "c3": 2, "d4": 3}
+KIND_DIRS = {"skeleton": "skeletons", "foldlabel": "foldlabels", "extremities": "extremities", "distmap": "distmaps"}
+NPY_BASENAMES = {"skeleton": "skeleton", "foldlabel": "label", "extremities": "extremities", "distmap": "distmap"}
+
+
+def _subject_set_layout(tmp_path, **subjects_by_kind):
+    """Writes <tmp>/out/<kind dir>/2mm/R/... volumes for the given subjects and the S.C. mask; returns out."""
+    out = tmp_path / "out"
+    for kind, subjects in subjects_by_kind.items():
+        side_dir = out / KIND_DIRS[kind] / "2mm" / SIDE
+        side_dir.mkdir(parents=True)
+        for subject in subjects:
+            arr = _source(SEEDS[subject])
+            if kind == "foldlabel":
+                arr = np.where(arr != 0, 1003, 0)
+            _write_volume(side_dir / f"{SIDE}resampled_{kind}_{subject}.nii.gz", arr)
+    mask = np.zeros(SHAPE, dtype=np.int16)
+    mask[2:5, 3:7, 4:9, 0] = 1
+    (tmp_path / "mask" / SIDE).mkdir(parents=True)
+    _write_volume(tmp_path / "mask" / SIDE / "S.C._right.nii.gz", mask)
+    return out
+
+
+def _crop(tmp_path, out, input_type, skip_dir=None):
+    gc.generate_crops(
+        src_dir=str(out / KIND_DIRS[input_type] / "2mm"),
+        skip_dir=str(out if skip_dir is None else skip_dir),
+        input_type=input_type,
+        crop_dir=str(tmp_path / "crops"),
+        mask_dir=str(tmp_path / "mask"),
+        side=SIDE,
+        list_sulci=["S.C."],
+        threshold=0,
+        dilation=2,
+    )
+
+
+def _stacked_subjects(tmp_path, input_type):
+    """Subjects of <side><basename>_subject.csv, after checking <side><basename>.npy has one row per subject."""
+    basename = NPY_BASENAMES[input_type]
+    subjects = pd.read_csv(tmp_path / "crops" / f"{SIDE}{basename}_subject.csv", dtype=str)["Subject"].tolist()
+    assert np.load(tmp_path / "crops" / f"{SIDE}{basename}.npy").shape[0] == len(subjects)
+    return subjects
+
+
+def _skip(out, subject, side=SIDE, step="generate_foldlabels"):
+    skip_list.record_skip(
+        skip_dir=str(out), side=side, step=step, subject=subject, exc=RuntimeError("graph without fold labels")
+    )
+
+
+def test_crop_subject_set_skip_list_lies_in_skip_dir_argument(tmp_path):
+    """REQ-CTFAIL-BDRABCZUK-86ED30A24CAB: skip lists are read from and recorded in the skip_dir argument."""
+    out = _subject_set_layout(tmp_path, skeleton=("a1", "b2", "c3"), foldlabel=("b2", "c3"))
+    skip_dir = tmp_path / "shared_skip_lists"
+    _skip(skip_dir, "c3")
+
+    _crop(tmp_path, out, "skeleton", skip_dir=skip_dir)
+    _crop(tmp_path, out, "foldlabel", skip_dir=skip_dir)
+
+    assert "c3" not in _stacked_subjects(tmp_path, "skeleton")
+    assert sorted(tmp_path.rglob("skip_list_*.jsonl")) == [skip_dir / f"skip_list_{SIDE}.jsonl"]
+    assert "a1" in skip_list.load_skipped(skip_dir=str(skip_dir), side=SIDE)
+
+
+def test_crop_subject_set_is_two_sided_subjects_minus_skip_list(tmp_path):
+    """REQ-CTFAIL-BDRABCZUK-3BB00563E231: skeleton and label CSVs list subjects with both files, minus the skip list."""
+    out = _subject_set_layout(tmp_path, skeleton=("a1", "b2", "c3"), foldlabel=("b2", "c3", "d4"))
+    _skip(out, "c3")
+
+    _crop(tmp_path, out, "skeleton")
+    _crop(tmp_path, out, "foldlabel")
+
+    assert _stacked_subjects(tmp_path, "skeleton") == ["b2"]
+    assert _stacked_subjects(tmp_path, "foldlabel") == ["b2"]
+
+
+@pytest.mark.parametrize("missing", ["foldlabel", "skeleton"])
+def test_crop_subject_set_records_one_sided_subject(tmp_path, missing):
+    """REQ-CTFAIL-BDRABCZUK-E8172C85579C: a subject with one of skeleton/foldlabel is recorded, step generate_crops."""
+    present = "skeleton" if missing == "foldlabel" else "foldlabel"
+    out = _subject_set_layout(tmp_path, **{present: ("a1", "b2"), missing: ("b2",)})
+
+    _crop(tmp_path, out, "skeleton")
+    _crop(tmp_path, out, "foldlabel")
+
+    entries = skip_list.load_skip_entries(skip_dir=str(out), side=SIDE)
+    assert [(entry.subject, entry.step) for entry in entries] == [("a1", "generate_crops")]
+
+
+@pytest.mark.parametrize("missing", ["foldlabel", "skeleton"])
+def test_crop_subject_set_entry_names_missing_input_type(tmp_path, missing):
+    """REQ-CTFAIL-BDRABCZUK-A8CAEF729DBF: the recorded entry's message names the missing input type."""
+    present = "skeleton" if missing == "foldlabel" else "foldlabel"
+    out = _subject_set_layout(tmp_path, **{present: ("a1", "b2"), missing: ("b2",)})
+
+    _crop(tmp_path, out, "skeleton")
+    _crop(tmp_path, out, "foldlabel")
+
+    entries = skip_list.load_skip_entries(skip_dir=str(out), side=SIDE)
+    assert len(entries) == 1
+    assert missing in entries[0].message
+
+
+def test_crop_subject_set_does_not_record_skip_listed_subject_again(tmp_path):
+    """REQ-CTFAIL-BDRABCZUK-D961CE0D63E8: a one-sided subject already skip-listed adds no entry."""
+    out = _subject_set_layout(tmp_path, skeleton=("a1", "b2"), foldlabel=("b2",))
+    _crop(tmp_path, out, "skeleton")  # a1 stacked before its foldlabel failure is known, as in region 1
+    _skip(out, "a1")
+    before = skip_list.load_skip_entries(skip_dir=str(out), side=SIDE)
+
+    _crop(tmp_path, out, "foldlabel")
+
+    assert skip_list.load_skip_entries(skip_dir=str(out), side=SIDE) == before
+
+
+@pytest.mark.parametrize("input_type", ["skeleton", "extremities", "distmap"])
+def test_crop_subject_set_leaves_skip_listed_subject_out(tmp_path, input_type):
+    """REQ-CTFAIL-BDRABCZUK-637B5474B61E: skeleton, extremities and distmap crops leave skip-listed subjects out."""
+    out = _subject_set_layout(tmp_path, **{kind: ("a1", "b2") for kind in {"skeleton", input_type}})
+    _skip(out, "a1")
+
+    if input_type == "extremities":
+        _crop(tmp_path, out, "skeleton")  # quality_checks_extremities compares with <side>skeleton
+    _crop(tmp_path, out, input_type)
+
+    assert _stacked_subjects(tmp_path, input_type) == ["b2"]
+
+
+def test_crop_subject_set_keeps_subject_skip_listed_on_opposite_side(tmp_path):
+    """REQ-CTFAIL-BDRABCZUK-AB3D7CB06EAC: a subject in the L skip list only stays in the R crops (per side)."""
+    out = _subject_set_layout(tmp_path, skeleton=("a1", "b2"))
+    _skip(out, "b2", side="L")
+    _skip(out, "a1", side=SIDE)
+
+    _crop(tmp_path, out, "skeleton")
+
+    assert _stacked_subjects(tmp_path, "skeleton") == ["b2"]
+
+
+def test_crop_subject_set_regression_missing_foldlabel_does_not_abort(tmp_path):
+    """REQ-CTFAIL-BDRABCZUK-D16162F8ED6A (DEF CB59D8EDF4AF): a subject without foldlabel aborts nothing."""
+    out = _subject_set_layout(tmp_path, skeleton=("a1", "b2", "c3"), foldlabel=("b2", "c3"))
+
+    _crop(tmp_path, out, "skeleton")
+    _crop(tmp_path, out, "foldlabel")  # raised AssertionError in quality_checks (skeleton 3 != label 2)
+
+    assert _stacked_subjects(tmp_path, "foldlabel") == ["b2", "c3"]
+
+
+# --- REQ-CTFAIL-BDRABCZUK-8FA3023B0E25: without skip_dir the skip-list directory is crop_dir ----------------
+
+
+def _crop_without_skip_dir(tmp_path, out, input_type):
+    """Crops as a standalone call that passes no skip_dir."""
+    gc.generate_crops(
+        src_dir=str(out / KIND_DIRS[input_type] / "2mm"),
+        input_type=input_type,
+        crop_dir=str(tmp_path / "crops"),
+        mask_dir=str(tmp_path / "mask"),
+        side=SIDE,
+        list_sulci=["S.C."],
+        threshold=0,
+        dilation=2,
+    )
+
+
+def test_crop_subject_set_without_skip_dir_records_in_crop_dir(tmp_path):
+    """REQ-CTFAIL-BDRABCZUK-8FA3023B0E25: called without skip_dir, a one-sided subject is recorded in the side's
+    skip list under the crop_dir argument, and no skip-list file is written anywhere else."""
+    out = _subject_set_layout(tmp_path, skeleton=("a1", "b2"), foldlabel=("b2",))
+
+    _crop_without_skip_dir(tmp_path, out, "skeleton")
+    _crop_without_skip_dir(tmp_path, out, "foldlabel")
+
+    crop_dir = tmp_path / "crops"
+    assert skip_list.load_skipped(skip_dir=str(crop_dir), side=SIDE) == {"a1"}
+    assert sorted(tmp_path.rglob("skip_list_*.jsonl")) == [crop_dir / f"skip_list_{SIDE}.jsonl"]
+
+
+def test_crop_subject_set_without_skip_dir_reads_skip_list_of_crop_dir(tmp_path):
+    """REQ-CTFAIL-BDRABCZUK-8FA3023B0E25: called without skip_dir, a subject in the side's skip list under the
+    crop_dir argument is left out of the stacked crop array."""
+    out = _subject_set_layout(tmp_path, skeleton=("a1", "b2"))
+    _skip(tmp_path / "crops", "a1")
+
+    _crop_without_skip_dir(tmp_path, out, "skeleton")
+
+    assert _stacked_subjects(tmp_path, "skeleton") == ["b2"]
