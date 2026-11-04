@@ -65,6 +65,7 @@ from cortical_tiles.brainvisa.utils.parallel import define_njobs
 from cortical_tiles.brainvisa.utils.quality_checks import \
     compare_number_aims_files_with_expected, \
     get_not_processed_subjects_transform
+from cortical_tiles.brainvisa.utils.skip_list import load_skipped, record_skip
 from pqdm.processes import pqdm
 from cortical_tiles.config.logs import set_file_logger
 from soma import aims
@@ -78,6 +79,9 @@ from cortical_tiles.brainvisa.utils.constants import \
 
 # Defines logger
 log = set_file_logger(__file__)
+
+# Member of the skip-list step set (skip_list.SKIP_STEPS)
+_STEP = "generate_ICBM2009c_transforms"
 
 
 def parse_args(argv):
@@ -190,9 +194,11 @@ class GraphGenerateTransform:
 
     def __init__(self, src_dir, transform_dir,
                  side, parallel,
-                 path_to_graph, bids, qc_path):
+                 path_to_graph, bids, qc_path, skip_dir=None):
         self.src_dir = src_dir
         self.transform_dir = transform_dir
+        # Skip-list directory: the transform_dir argument unless given
+        self.skip_dir = transform_dir if skip_dir is None else skip_dir
         self.side = side
         self.parallel = parallel
         self.path_to_graph = path_to_graph
@@ -206,16 +212,19 @@ class GraphGenerateTransform:
 
         Returns (subject, None) on success or (subject, error_message) on
         failure so that compute() can collect a per-subject report without
-        crashing the whole batch.
+        crashing the whole batch. A failure is recorded with record_skip
+        (in this process, with the raised exception) in the side's skip list.
         """
         graph_path = f"{self.src_dir}/{subject}*/" +\
                      f"{self.path_to_graph}/{self.side}*.arg"
         log.debug(graph_path)
         list_graph_file = glob.glob(graph_path)
         log.debug(f"list_graph_file = {list_graph_file}")
-        if len(list_graph_file) == 0:
-            msg = f"No graph file: {graph_path} doesn't exist"
-            return (subject, msg)
+        if not list_graph_file:
+            exc = FileNotFoundError(
+                f"No graph file: {graph_path} doesn't exist")
+            record_skip(self.skip_dir, self.side, _STEP, subject, exc)
+            return (subject, str(exc))
         try:
             for graph_file in list_graph_file:
                 transform_file = self.get_transform_filename(
@@ -228,8 +237,8 @@ class GraphGenerateTransform:
                 if not self.bids:
                     break
         except Exception as exc:
-            msg = str(exc)
-            return (subject, msg)
+            record_skip(self.skip_dir, self.side, _STEP, subject, exc)
+            return (subject, str(exc))
         return (subject, None)
 
     def get_transform_filename(self, subject, graph_file):
@@ -245,6 +254,8 @@ class GraphGenerateTransform:
                          if is_it_a_subject(filename)]
         log.info(f"Number of subjects before qc = {len(list_subjects)}")
         list_subjects = select_good_qc(list_subjects, self.qc_path)
+        skipped = load_skipped(self.skip_dir, self.side)
+        list_subjects = [s for s in list_subjects if s not in skipped]
         not_processed_subjects = \
             get_not_processed_subjects_transform(list_subjects,
                                                  self.transform_dir,
@@ -271,21 +282,24 @@ class GraphGenerateTransform:
             results = [self.generate_one_transform(sub)
                        for sub in list_subjects]
 
-        # Build per-subject report (print to stdout — log goes to file)
+        # pqdm returns (does not raise) an exception the worker let through
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+
+        # Per-subject report, one INFO record on the module logger
         failures = {sub: reason for sub, reason in results
                     if reason is not None}
         n_ok = len(list_subjects) - len(failures)
         lines = [
-            "",
-            "--- Transform generation summary ---",
+            f"--- Transform generation summary (side={self.side}) ---",
             f"  Succeeded: {n_ok}/{len(list_subjects)}",
         ]
         if failures:
             lines.append(f"  Skipped ({len(failures)}):")
             for sub, reason in sorted(failures.items()):
                 lines.append(f"    {sub}: {reason}")
-        lines.append("------------------------------------")
-        print("\n".join(lines), flush=True)
+        log.info("\n".join(lines))
 
         # Checks if there is expected number of generated files
         if self.bids:
@@ -307,8 +321,13 @@ def generate_ICBM2009c_transforms(
         bids=False,
         parallel=False,
         nb_subjects=_ALL_SUBJECTS,
-        qc_path=_QC_PATH_DEFAULT):
-    """Generates skeletons from graphs"""
+        qc_path=_QC_PATH_DEFAULT,
+        skip_dir=None):
+    """Generates skeletons from graphs
+
+    skip_dir: directory of the per-side skip lists (cortical_tiles skip_list
+    module). Default: transform_dir.
+    """
 
     # Initialization
     transform = GraphGenerateTransform(
@@ -318,7 +337,8 @@ def generate_ICBM2009c_transforms(
         side=side,
         bids=bids,
         parallel=parallel,
-        qc_path=qc_path
+        qc_path=qc_path,
+        skip_dir=skip_dir
     )
     # Actual generation of skeletons from graphs
     transform.compute(nb_subjects=nb_subjects)
