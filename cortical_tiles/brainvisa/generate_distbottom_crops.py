@@ -386,7 +386,7 @@ def parse_args(argv):
     return params
 
 
-def generate_distbottom_crops(
+def generate_distbottom_crops(  # noqa: PLR0913 - skip_dir is required by the contract
         src_dir=_CROP_DIR_DEFAULT,
         crop_dir=_CROP_DIR_DEFAULT,
         side=_SIDE_DEFAULT,
