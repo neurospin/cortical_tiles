@@ -59,7 +59,8 @@ from cortical_tiles.brainvisa.utils.save_data import \
 from cortical_tiles.brainvisa.utils.folder import create_folder
 from cortical_tiles.brainvisa.utils.crop_subjects import \
     cropped_subjects, qc_removed_subjects, restrict_stack
-from cortical_tiles.brainvisa.utils.skip_list import load_skipped
+from cortical_tiles.brainvisa.utils.skip_list import \
+    covered_by, load_skipped
 from cortical_tiles.brainvisa.utils.logs import LogJson
 from cortical_tiles.brainvisa.utils.logs import setup_log
 from cortical_tiles.brainvisa.utils.parallel import define_njobs
@@ -404,11 +405,13 @@ def generate_distbottom_crops(  # noqa: PLR0913 - skip_dir and qc_path are requi
     params.pop('skip_dir')
     params.pop('qc_path')
     skip_dir = crop_dir if skip_dir is None else skip_dir
-    excluded = set(load_skipped(skip_dir, side))
+    skipped = load_skipped(skip_dir, side)
+    excluded = set(skipped)
     if nb_subjects:
-        excluded |= qc_removed_subjects(
-            qc_path, cropped_subjects(src_dir, side, "skeleton")
-            | cropped_subjects(crop_dir, side, "distbottom"))
+        keys = (cropped_subjects(src_dir, side, "skeleton")
+                | cropped_subjects(crop_dir, side, "distbottom"))
+        excluded |= {key for key in keys if covered_by(key, skipped)}
+        excluded |= qc_removed_subjects(qc_path, keys)
     params['excluded_subjects'] = frozenset(excluded)
 
     # Initialization with same arguments and values as function

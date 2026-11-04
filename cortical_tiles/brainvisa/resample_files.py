@@ -74,7 +74,8 @@ from cortical_tiles.brainvisa.utils.quality_checks import \
     compare_number_aims_files_with_number_in_source, \
     get_not_processed_files, \
     save_list_to_csv
-from cortical_tiles.brainvisa.utils.skip_list import load_skipped, record_skip
+from cortical_tiles.brainvisa.utils.skip_list import \
+    covered_by, load_skipped, record_skip
 from cortical_tiles.config.logs import set_file_logger
 from soma import aims
 
@@ -438,9 +439,10 @@ class FileResampler:
                 skipped = load_skipped(self.skip_dir, self.side)
                 list_not_processed_subjects = [
                     s for s in list_not_processed_subjects
-                    if s not in skipped]
+                    if not covered_by(s, skipped)]
                 list_all_subjects = [
-                    s for s in list_all_subjects if s not in skipped]
+                    s for s in list_all_subjects
+                    if not covered_by(s, skipped)]
             else:
                 raise NotADirectoryError(
                     f"{self.src_dir} doesn't exist or is not a directory")

@@ -48,7 +48,6 @@
 
 import argparse
 import glob
-import re
 import sys
 from os.path import abspath
 from os.path import exists
@@ -71,7 +70,8 @@ from cortical_tiles.brainvisa.utils.quality_checks import \
     compare_number_aims_files_with_expected, \
     get_not_processed_subjects, \
     save_list_to_csv
-from cortical_tiles.brainvisa.utils.skip_list import load_skipped, record_skip
+from cortical_tiles.brainvisa.utils.skip_list import \
+    load_skipped, record_skip, session_key
 from cortical_tiles.config.logs import set_file_logger
 
 # Import constants
@@ -194,33 +194,25 @@ class GraphConvert2FoldLabel:
         self.path_to_graph = path_to_graph
         self.bids = bids
         self.foldlabel_dir = f"{self.foldlabel_dir}/{self.side}"
+        self.skipped_keys = frozenset()
 
         create_folder(abspath(self.foldlabel_dir))
 
     def get_foldlabel_filename(self, subject, graph_file):
         """Build foldlabel file name"""
-        foldlabel_file = f"{self.foldlabel_dir}/" + \
-            f"{self.side}foldlabel_{subject}"
-        if self.bids:
-            session = re.search("ses-([^_/]+)", graph_file)
-            acquisition = re.search("acq-([^_/]+)", graph_file)
-            run = re.search("run-([^_/]+)", graph_file)
-            if session:
-                foldlabel_file += f"_{session[0]}"
-            if acquisition:
-                foldlabel_file += f"_{acquisition[0]}"
-            if run:
-                foldlabel_file += f"_{run[0]}"
-        foldlabel_file += ".nii.gz"
-        return foldlabel_file
+        key = session_key(subject, graph_file, self.bids)
+        return f"{self.foldlabel_dir}/{self.side}foldlabel_{key}.nii.gz"
 
     def generate_one_foldlabel(self, subject: str):
         """Generates and writes foldlabel for one subject.
 
         Returns (subject, None) on success or (subject, error_message) on
-        failure; a failure is recorded in the side's skip list, so that
-        compute() can collect a per-subject report without crashing the
-        whole batch.
+        failure, error_message being the first failure of the subject. A
+        failure is recorded in the side's skip list with the key of the graph
+        file, so that compute() can collect a per-subject report without
+        crashing the whole batch; in BIDS mode the other graph files go on,
+        and a graph file whose key was listed when the run started is left
+        out.
         """
         # Gets graph file path
         graph_path = f"{self.src_dir}/{subject}/" +\
@@ -233,19 +225,23 @@ class GraphConvert2FoldLabel:
             record_skip(self.skip_dir, self.side, _STEP, subject, exc)
             return subject, str(exc)
 
-        try:
-            for graph_file in list_graph_file:
+        first_failure = None
+        for graph_file in list_graph_file:
+            key = session_key(subject, graph_file, self.bids)
+            if self.bids and key in self.skipped_keys:
+                continue
+            try:
                 foldlabel_file = self.get_foldlabel_filename(
                     subject, graph_file)
                 if not exists(foldlabel_file):
                     generate_foldlabel_from_graph_file(
                         graph_file, foldlabel_file, self.junction)
-                if not self.bids:
-                    break
-        except Exception as exc:
-            record_skip(self.skip_dir, self.side, _STEP, subject, exc)
-            return subject, str(exc)
-        return subject, None
+            except Exception as exc:
+                record_skip(self.skip_dir, self.side, _STEP, key, exc)
+                first_failure = str(exc) if first_failure is None else first_failure
+            if not self.bids:
+                break
+        return subject, first_failure
 
     def compute(self, nb_subjects):
         """Loops over subjects and converts graphs into skeletons.
@@ -257,6 +253,7 @@ class GraphConvert2FoldLabel:
         log.info(f"Number of subjects before qc = {len(list_subjects)}")
         qc_subjects = select_good_qc(list_subjects, self.qc_path)
         skipped = load_skipped(self.skip_dir, self.side)
+        self.skipped_keys = frozenset(skipped)
         processable = [s for s in qc_subjects if s not in skipped]
         not_processed_subjects = get_not_processed_subjects(
             processable, self.foldlabel_dir, "foldlabel_")
