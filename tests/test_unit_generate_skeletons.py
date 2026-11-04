@@ -15,6 +15,7 @@ import os
 
 import pytest
 from cortical_tiles.brainvisa import generate_skeletons as gs
+from cortical_tiles.brainvisa.utils.skip_list import load_skip_entries, record_skip
 from pathos import multiprocessing as pathos_mp
 
 PATH_TO_GRAPH = "t1mri/default_acquisition/default_analysis/folds/3.1"
@@ -149,7 +150,12 @@ def test_main_calls_generate_skeletons_with_its_own_parameter_names(tmp_path, mo
 
     assert len(received) == 1
     params = received[0]
-    expected_names = set(inspect.signature(gs.GraphConvert2Skeleton.__init__).parameters) - {"self", "njobs"}
+    # njobs and skip_dir have no CLI option: main leaves them at their defaults (REQ-CTILESTEST-157 lists the keywords).
+    expected_names = set(inspect.signature(gs.GraphConvert2Skeleton.__init__).parameters) - {
+        "self",
+        "njobs",
+        "skip_dir",
+    }
     assert set(params) == expected_names | {"nb_subjects"}
     assert params == dict(
         src_dir=str(tmp_path / "morpho"),
@@ -162,3 +168,156 @@ def test_main_calls_generate_skeletons_with_its_own_parameter_names(tmp_path, mo
         parallel=True,
         nb_subjects=2,
     )
+
+
+# --- CTFAIL: per-subject failures go to the side's skip list under the skip_dir argument -------
+# skip_dir is one directory shared by every cortical_tiles step (the output root; passed in by
+# generate_one_sulcal_region), distinct from skeleton_dir: skip_list_L.jsonl and skip_list_R.jsonl
+# sit side by side there, and no skip-list file is written under skeleton_dir. Called without skip_dir,
+# the step falls back to its own skeleton_dir argument as the skip-list directory.
+
+
+def _skip_dir(tmp_path):
+    return tmp_path / "skiplists"
+
+
+def _generate(tmp_path, parallel, **skip_kwargs):
+    """Runs the public generate_skeletons step on side L with the test layout of _converter."""
+    gs.generate_skeletons(
+        src_dir=str(tmp_path / "morpho"),
+        skeleton_dir=str(tmp_path / "skeletons"),
+        path_to_graph=PATH_TO_GRAPH,
+        side="L",
+        junction="thin",
+        bids=False,
+        parallel=parallel,
+        nb_subjects=-1,
+        qc_path="",
+        njobs=1,
+        **skip_kwargs,
+    )
+
+
+def _skip_list_files(root):
+    return sorted(str(p) for p in root.rglob("skip_list_*.jsonl"))
+
+
+@pytest.fixture
+def conversion_failing_for_s02(monkeypatch):
+    """Recorder like fake_conversion, but raises RuntimeError for subject s02 (worker exception)."""
+
+    def _fake(graph_file, skeleton_file, junction):
+        if os.path.basename(graph_file) == "Ls02.arg":
+            raise RuntimeError("conversion failed for s02")
+        open(skeleton_file, "w").close()
+
+    monkeypatch.setattr(gs, "generate_skeleton_from_graph_file", _fake)
+
+
+@pytest.mark.parametrize("parallel", [False, True], ids=["serial", "parallel"])
+def test_conversion_exception_is_recorded_in_side_skip_list(
+    tmp_path, conversion_failing_for_s02, fresh_process_pool, parallel
+):
+    """REQ-CTFAIL-BDRABCZUK-857E63247073: a conversion exception -> one entry (s02, step, type) under skip_dir."""
+    for subject in ("s01", "s02", "s03"):
+        _make_subject(tmp_path, subject, with_graph=True)
+
+    _generate(tmp_path, parallel, skip_dir=str(_skip_dir(tmp_path)))
+
+    entries = load_skip_entries(_skip_dir(tmp_path), "L")
+    assert [(e.subject, e.step, e.exc_type) for e in entries] == [("s02", "generate_skeletons", "RuntimeError")]
+    assert load_skip_entries(_skip_dir(tmp_path), "R") == []
+    assert _skip_list_files(tmp_path / "skeletons") == []
+
+
+@pytest.mark.parametrize("parallel", [False, True], ids=["serial", "parallel"])
+def test_other_subjects_are_converted_after_one_subject_raises(
+    tmp_path, conversion_failing_for_s02, fresh_process_pool, parallel
+):
+    """REQ-CTFAIL-BDRABCZUK-37A628E0AA69: s02 raises -> compute returns, s01 and s03 skeletons are written."""
+    for subject in ("s01", "s02", "s03"):
+        _make_subject(tmp_path, subject, with_graph=True)
+
+    _converter(tmp_path, parallel=parallel).compute(nb_subjects=-1)
+
+    side_dir = tmp_path / "skeletons" / "L"
+    assert os.path.exists(side_dir / "Lskeleton_generated_s01.nii.gz")
+    assert os.path.exists(side_dir / "Lskeleton_generated_s03.nii.gz")
+    assert not os.path.exists(side_dir / "Lskeleton_generated_s02.nii.gz")
+
+
+@pytest.mark.parametrize("parallel", [False, True], ids=["serial", "parallel"])
+def test_subject_without_graph_is_recorded_in_side_skip_list(tmp_path, fake_conversion, fresh_process_pool, parallel):
+    """REQ-CTFAIL-BDRABCZUK-9A277416EDBE: no graph -> FileNotFoundError entry under skip_dir naming the graph path."""
+    _make_subject(tmp_path, "s01", with_graph=True)
+    _make_subject(tmp_path, "s02", with_graph=False)
+
+    _generate(tmp_path, parallel, skip_dir=str(_skip_dir(tmp_path)))
+
+    entries = load_skip_entries(_skip_dir(tmp_path), "L")
+    assert [(e.subject, e.step, e.exc_type) for e in entries] == [("s02", "generate_skeletons", "FileNotFoundError")]
+    assert f"{tmp_path}/morpho/s02/{PATH_TO_GRAPH}/L*.arg" in entries[0].message
+    assert _skip_list_files(tmp_path / "skeletons") == []
+    # The skipped_subjects.csv of REQ-CTILESTEST-156 is still written alongside.
+    assert os.path.exists(tmp_path / "skeletons" / "L" / "skipped_subjects.csv")
+
+
+@pytest.mark.parametrize("parallel", [False, True], ids=["serial", "parallel"])
+def test_subject_in_skip_list_is_not_processed(tmp_path, fake_conversion, fresh_process_pool, monkeypatch, parallel):
+    """REQ-CTFAIL-BDRABCZUK-A5A1271FDD6E: a subject listed under skip_dir is neither converted nor re-listed."""
+    _make_subject(tmp_path, "s01", with_graph=True)
+    _make_subject(tmp_path, "s02", with_graph=True)
+    _make_subject(tmp_path, "s03", with_graph=False)
+    # Entries of another step in the shared skip list exclude the subject too.
+    record_skip(_skip_dir(tmp_path), "L", "generate_foldlabels", "s02", RuntimeError("earlier run"))
+    record_skip(_skip_dir(tmp_path), "L", "generate_skeletons", "s03", FileNotFoundError("earlier run"))
+    processed = []
+    if not parallel:  # the spy's list is only visible in the calling process
+        original = gs.GraphConvert2Skeleton.generate_one_skeleton
+
+        def _spy(self, subject):
+            processed.append(subject)
+            return original(self, subject)
+
+        monkeypatch.setattr(gs.GraphConvert2Skeleton, "generate_one_skeleton", _spy)
+
+    _generate(tmp_path, parallel, skip_dir=str(_skip_dir(tmp_path)))
+
+    side_dir = tmp_path / "skeletons" / "L"
+    assert os.path.exists(side_dir / "Lskeleton_generated_s01.nii.gz")
+    assert not os.path.exists(side_dir / "Lskeleton_generated_s02.nii.gz")
+    assert [e.subject for e in load_skip_entries(_skip_dir(tmp_path), "L")] == ["s02", "s03"]
+    if not parallel:
+        assert processed == ["s01"]
+
+
+@pytest.mark.parametrize("parallel", [False, True], ids=["serial", "parallel"])
+def test_generate_skeletons_without_skip_dir_records_in_skeleton_dir(
+    tmp_path, conversion_failing_for_s02, fresh_process_pool, parallel
+):
+    """REQ-CTFAIL-BDRABCZUK-FB8439C9A8F6: no skip_dir -> the failing and the graph-less subject are recorded in
+    the side's skip list under the skeleton_dir argument, and no other skip-list file is written."""
+    for subject in ("s01", "s02"):
+        _make_subject(tmp_path, subject, with_graph=True)
+    _make_subject(tmp_path, "s03", with_graph=False)
+
+    _generate(tmp_path, parallel)
+
+    skeleton_dir = tmp_path / "skeletons"
+    entries = load_skip_entries(skeleton_dir, "L")
+    assert sorted((e.subject, e.exc_type) for e in entries) == [("s02", "RuntimeError"), ("s03", "FileNotFoundError")]
+    assert _skip_list_files(tmp_path) == [str(skeleton_dir / "skip_list_L.jsonl")]
+
+
+def test_generate_skeletons_without_skip_dir_reads_skip_list_of_skeleton_dir(tmp_path, fake_conversion):
+    """REQ-CTFAIL-BDRABCZUK-FB8439C9A8F6: no skip_dir -> a subject in the side's skip list under the skeleton_dir
+    argument is not converted; the other subject is."""
+    _make_subject(tmp_path, "s01", with_graph=True)
+    _make_subject(tmp_path, "s02", with_graph=True)
+    record_skip(tmp_path / "skeletons", "L", "generate_foldlabels", "s02", RuntimeError("earlier run"))
+
+    _generate(tmp_path, parallel=False)
+
+    side_dir = tmp_path / "skeletons" / "L"
+    assert os.path.exists(side_dir / "Lskeleton_generated_s01.nii.gz")
+    assert not os.path.exists(side_dir / "Lskeleton_generated_s02.nii.gz")
