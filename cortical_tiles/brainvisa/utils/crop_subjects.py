@@ -3,8 +3,10 @@
 ``quality_checks`` and ``quality_checks_extremities`` check that the stacked
 arrays of a side agree with each other and with their subject CSVs;
 ``record_one_sided_subjects`` skip-lists the subjects having a resampled file
-of one input type only, and ``restrict_stack`` drops excluded subjects from a
-stacked array and its CSV.
+of one input type only, ``restrict_stack`` drops excluded subjects from a
+stacked array and its CSV, ``collect_failed_subjects`` reads the failures out
+of the crop worker results, and ``check_stack_has_subjects`` raises
+``NoValidSubjectError`` when a stack holds no subject.
 """
 
 import os
@@ -15,6 +17,26 @@ import numpy as np
 import pandas as pd
 
 from cortical_tiles.brainvisa.utils.skip_list import record_skip
+
+
+class NoValidSubjectError(RuntimeError):
+    """No subject of a side is left in its stacked crop array"""
+
+
+def collect_failed_subjects(results):
+    """Returns the subjects of the crop worker results that carry a reason"""
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result
+    return {subject for subject, reason in results if reason is not None}
+
+
+def check_stack_has_subjects(crop_dir, file_basename, side):
+    """Raises NoValidSubjectError when the subject CSV of a stack is empty"""
+    csv_file = join(crop_dir, f"{file_basename}_subject.csv")
+    if pd.read_csv(csv_file, dtype=str).empty:
+        raise NoValidSubjectError(
+            f"no valid subject left on side {side} in {csv_file}")
 
 
 def quality_checks(crop_dir, side):

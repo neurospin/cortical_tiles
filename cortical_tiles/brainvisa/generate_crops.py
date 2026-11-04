@@ -62,9 +62,10 @@ import scipy.ndimage
 from cortical_tiles.brainvisa import exception_handler
 from cortical_tiles.brainvisa.utils.save_data import save_to_numpy
 from cortical_tiles.brainvisa.utils.crop_subjects import \
+    check_stack_has_subjects, collect_failed_subjects, \
     quality_checks, quality_checks_extremities, \
     record_one_sided_subjects, restrict_stack
-from cortical_tiles.brainvisa.utils.skip_list import load_skipped
+from cortical_tiles.brainvisa.utils.skip_list import load_skipped, record_skip
 from cortical_tiles.brainvisa.utils.bbox import compute_max_box
 from cortical_tiles.brainvisa.utils.folder import create_folder
 from cortical_tiles.brainvisa.utils.logs import LogJson
@@ -99,6 +100,9 @@ from cortical_tiles.brainvisa.utils.constants import \
 # Defines logger
 log = set_file_logger(__file__)
 _STEP = "generate_crops"
+# Stacks of the side that an earlier pass of the run order wrote
+_EARLIER_STACKS = {"foldlabel": ("skeleton",),
+                   "extremities": ("skeleton", "label")}
 
 
 def crop_bbox(file_src: str, file_cropped: str,
@@ -179,7 +183,8 @@ class CropGenerator:
                  parallel=False,
                  no_mask=_NO_MASK_DEFAULT,
                  njobs=_NB_JOBS_DEFAULT,
-                 excluded_subjects=frozenset()):
+                 excluded_subjects=frozenset(),
+                 skip_dir=None):
         """Inits with list of directories and list of sulci
         Args:
             src_dir: folder containing generated skeletons, labels or distmaps
@@ -193,6 +198,7 @@ class CropGenerator:
                                    or R for right hemisphere)
             cropping_type: cropping type, either mask, or bbox
             combine_type: if True, combines sulci (in this case, order matters)
+            skip_dir: directory of the skip lists, by default crop_dir
         """
 
         self.crop_dir = crop_dir
@@ -211,6 +217,8 @@ class CropGenerator:
         self.no_mask = no_mask
         self.njobs = njobs
         self.excluded_subjects = frozenset(excluded_subjects)
+        self.skip_dir = crop_dir if skip_dir is None else skip_dir
+        self.failed_subjects = set()
         print(self.no_mask)
 
         # Names of files in function of dictionary:
@@ -221,6 +229,31 @@ class CropGenerator:
         # Initialization of bounding box coordinates
         self.bbmin = np.zeros(3)
         self.bbmax = np.zeros(3)
+
+    def cropped_path(self, subject_id):
+        """Returns the path of the cropped file of the subject"""
+        return join(
+            self.cropped_samples_dir,
+            self.cropped_file % {
+                'subject': subject_id,
+                'side': self.side})
+
+    def crop_one_subject(self, subject_id):
+        """Crops one subject; on failure deletes its file and records it
+        Args:
+            subject_id: string giving the subject ID
+        Returns:
+            (subject_id, None), or (subject_id, reason) when the crop failed
+        """
+        try:
+            self.crop_one_file(subject_id)
+        except Exception as exc:
+            path = self.cropped_path(subject_id)
+            if os.path.exists(path):
+                os.remove(path)
+            record_skip(self.skip_dir, self.side, _STEP, subject_id, exc)
+            return subject_id, str(exc)
+        return subject_id, None
 
     def crop_one_file(self, subject_id):
         """Crops one file
@@ -239,11 +272,7 @@ class CropGenerator:
 
         if os.path.exists(file_src):
             # Creates output (cropped) file name
-            file_cropped = join(
-                self.cropped_samples_dir,
-                self.cropped_file % {
-                    'subject': subject_id,
-                    'side': self.side})
+            file_cropped = self.cropped_path(subject_id)
 
             # Cropping of skeleton image
             if self.cropping_type == 'bbox':
@@ -342,15 +371,16 @@ class CropGenerator:
                 if self.parallel:
                     log.info(
                         "PARALLEL MODE: subjects are in parallel")
-                    p_map(
-                        self.crop_one_file,
+                    results = p_map(
+                        self.crop_one_subject,
                         list_subjects,
                         num_cpus=define_njobs())
                 else:
                     log.info(
                         "SERIAL MODE: subjects are scanned serially")
-                    for sub in list_subjects:
-                        self.crop_one_file(sub)
+                    results = [self.crop_one_subject(sub)
+                               for sub in list_subjects]
+                self.failed_subjects = collect_failed_subjects(results)
             else:
                 list_subjects = []
                 log.info(
@@ -445,7 +475,8 @@ class CropGenerator:
                               file_basename=self.file_basename_npy,
                               parallel=self.parallel)
             restrict_stack(self.crop_dir, self.file_basename_npy,
-                           self.excluded_subjects, write_sub_id=True)
+                           self.excluded_subjects | self.failed_subjects,
+                           write_sub_id=True)
 
 
 class SkeletonCropGenerator(CropGenerator):
@@ -466,7 +497,8 @@ class SkeletonCropGenerator(CropGenerator):
                  threshold=_THRESHOLD_DEFAULT,
                  dilation=_DILATION_DEFAULT,
                  njobs=_NB_JOBS_DEFAULT,
-                 excluded_subjects=frozenset()):
+                 excluded_subjects=frozenset(),
+                 skip_dir=None):
         """Inits with list of directories and list of sulci
         Args:
             src_dir: folder containing generated skeletons or labels
@@ -489,7 +521,7 @@ class SkeletonCropGenerator(CropGenerator):
             cropping_type=cropping_type, combine_type=combine_type,
             parallel=parallel, no_mask=no_mask,
             threshold=threshold, dilation=dilation,
-            excluded_subjects=excluded_subjects)
+            excluded_subjects=excluded_subjects, skip_dir=skip_dir)
 
         # Directory where to store cropped skeleton files
         self.cropped_samples_dir = join(self.crop_dir, self.side + 'crops')
@@ -536,7 +568,8 @@ class FoldLabelCropGenerator(CropGenerator):
                  threshold=_THRESHOLD_DEFAULT,
                  dilation=_DILATION_DEFAULT,
                  njobs=_NB_JOBS_DEFAULT,
-                 excluded_subjects=frozenset()):
+                 excluded_subjects=frozenset(),
+                 skip_dir=None):
         """Inits with list of directories and list of sulci
         Args:
             src_dir: folder containing generated labels
@@ -560,7 +593,7 @@ class FoldLabelCropGenerator(CropGenerator):
             cropping_type=cropping_type, combine_type=combine_type,
             parallel=parallel, no_mask=no_mask,
             threshold=threshold, dilation=dilation,
-            excluded_subjects=excluded_subjects)
+            excluded_subjects=excluded_subjects, skip_dir=skip_dir)
 
         # Directory where to store cropped skeleton files
         self.cropped_samples_dir = join(self.crop_dir, self.side + 'labels')
@@ -607,7 +640,8 @@ class ExtremitiesCropGenerator(CropGenerator):
                  threshold=_THRESHOLD_DEFAULT,
                  dilation=_DILATION_DEFAULT,
                  njobs=_NB_JOBS_DEFAULT,
-                 excluded_subjects=frozenset()):
+                 excluded_subjects=frozenset(),
+                 skip_dir=None):
         """Inits with list of directories and list of sulci
         Args:
             src_dir: folder containing generated extremities
@@ -631,7 +665,7 @@ class ExtremitiesCropGenerator(CropGenerator):
             cropping_type=cropping_type, combine_type=combine_type,
             parallel=parallel, no_mask=no_mask,
             threshold=threshold, dilation=dilation,
-            excluded_subjects=excluded_subjects)
+            excluded_subjects=excluded_subjects, skip_dir=skip_dir)
 
         # Directory where to store cropped skeleton files
         self.cropped_samples_dir = join(self.crop_dir,
@@ -679,7 +713,8 @@ class DistMapCropGenerator(CropGenerator):
                  threshold=_THRESHOLD_DEFAULT,
                  dilation=_DILATION_DEFAULT,
                  njobs=_NB_JOBS_DEFAULT,
-                 excluded_subjects=frozenset()):
+                 excluded_subjects=frozenset(),
+                 skip_dir=None):
         """Inits with list of directories and list of sulci
         Args:
             src_dir: folder containing generated skeletons, labels or distmaps
@@ -701,7 +736,7 @@ class DistMapCropGenerator(CropGenerator):
             cropping_type=cropping_type, combine_type=combine_type,
             parallel=parallel, no_mask=no_mask,
             threshold=threshold, dilation=dilation, njobs=njobs,
-            excluded_subjects=excluded_subjects)
+            excluded_subjects=excluded_subjects, skip_dir=skip_dir)
 
         # Directory where to store cropped skeleton files
         self.cropped_samples_dir = join(self.crop_dir, self.side + 'distmaps')
@@ -865,7 +900,8 @@ def generate_crops(
     params = locals()
     params.pop('nb_subjects')
     params.pop('input_type')
-    skip_dir = crop_dir if params.pop('skip_dir') is None else skip_dir
+    skip_dir = crop_dir if skip_dir is None else skip_dir
+    params['skip_dir'] = skip_dir
     excluded = set(load_skipped(skip_dir, side))
     if input_type == "foldlabel" and nb_subjects:
         excluded |= record_one_sided_subjects(src_dir, side, skip_dir,
@@ -886,10 +922,14 @@ def generate_crops(
             "'extremities' or 'distmap'")
 
     crop.compute(nb_subjects=nb_subjects)
+    excluded |= crop.failed_subjects
+
+    if nb_subjects:
+        for stack in _EARLIER_STACKS.get(input_type, ()):
+            restrict_stack(crop_dir, f"{side}{stack}", excluded)
+        check_stack_has_subjects(crop_dir, crop.file_basename_npy, side)
 
     if input_type == "foldlabel":
-        if nb_subjects:
-            restrict_stack(crop_dir, f"{side}skeleton", excluded)
         quality_checks(crop_dir, side)
     elif input_type == "extremities":
         quality_checks_extremities(crop_dir, side)

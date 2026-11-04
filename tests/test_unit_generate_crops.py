@@ -10,6 +10,7 @@ or "QUIRK" pin current behaviour that looks wrong or surprising; it is recorded,
 (tests-only rule of TASK-114).
 """
 
+import logging
 import os
 
 import numpy as np
@@ -17,6 +18,7 @@ import pandas as pd
 import pytest
 from cortical_tiles.brainvisa import generate_crops as gc
 from cortical_tiles.brainvisa.utils import skip_list
+from pathos import multiprocessing as pathos_mp
 from soma import aims
 
 SIDE = "R"
@@ -343,7 +345,7 @@ def _subject_set_layout(tmp_path, **subjects_by_kind):
     return out
 
 
-def _crop(tmp_path, out, input_type, skip_dir=None):
+def _crop(tmp_path, out, input_type, skip_dir=None, parallel=False):
     gc.generate_crops(
         src_dir=str(out / KIND_DIRS[input_type] / "2mm"),
         skip_dir=str(out if skip_dir is None else skip_dir),
@@ -354,6 +356,7 @@ def _crop(tmp_path, out, input_type, skip_dir=None):
         list_sulci=["S.C."],
         threshold=0,
         dilation=2,
+        parallel=parallel,
     )
 
 
@@ -509,3 +512,288 @@ def test_crop_subject_set_without_skip_dir_reads_skip_list_of_crop_dir(tmp_path)
     _crop_without_skip_dir(tmp_path, out, "skeleton")
 
     assert _stacked_subjects(tmp_path, "skeleton") == ["b2"]
+
+
+# --- TASK-CTFAIL-BDRABCZUK-6524B672025E: a subject whose crop fails, serial runs and p_map workers ----------
+# Failures are real unless a test patches crop_mask: "missing" is a dangling link, which the glob lists and
+# crop_one_file refuses with FileNotFoundError; "unreadable" is a file aims.read refuses with OSError. crop_one_file
+# itself keeps raising (REQ-CTILESTEST-60); these tests go through generate_crops.
+
+BAD = "b2"
+STEP = "generate_crops"
+MODES = [pytest.param(False, id="serial"), pytest.param(True, id="parallel")]
+HOW = [("missing", "FileNotFoundError"), ("unreadable", "OSError")]
+SAMPLE_DIRS = {"skeleton": "crops", "foldlabel": "labels"}
+
+
+def _break_source(out, input_type, subject, how="unreadable"):
+    """Replaces the resampled file of the subject so that its crop fails."""
+    path = out / KIND_DIRS[input_type] / "2mm" / SIDE / f"{SIDE}resampled_{input_type}_{subject}.nii.gz"
+    path.unlink()
+    if how == "missing":
+        path.symlink_to(path.with_name("absent.nii.gz"))
+    else:
+        path.write_bytes(b"not a nifti volume")
+
+
+def _cropped_subjects(tmp_path, input_type):
+    """Subjects having a cropped file of input_type under crops/<side><sample dir>."""
+    suffix = f"_cropped_{input_type}.nii.gz"
+    sample_dir = tmp_path / "crops" / f"{SIDE}{SAMPLE_DIRS[input_type]}"
+    return sorted(path.name[: -len(suffix)] for path in sample_dir.glob(f"*{suffix}"))
+
+
+def _recorded(skip_dir):
+    return [(entry.subject, entry.step) for entry in skip_list.load_skip_entries(skip_dir=str(skip_dir), side=SIDE)]
+
+
+def _clear_pathos_pools():
+    state = pathos_mp._ProcessPool__STATE
+    for pool in list(state.values()):
+        pool.terminate()
+        pool.join()
+    state.clear()
+
+
+def _crop_in_mode(tmp_path, out, input_type, parallel, skip_dir=None):
+    """Crops serially or in p_map workers; a parallel run gets pools of its own, as no worker may outlive the test."""
+    _clear_pathos_pools()
+    try:
+        _crop(tmp_path, out, input_type, skip_dir=skip_dir, parallel=parallel)
+    finally:
+        _clear_pathos_pools()
+
+
+@pytest.fixture
+def raising_crop(monkeypatch):
+    """crop_mask raises RuntimeError('boom') from KeyError for BAD and crops the others; collects what it raised."""
+    raised = []
+    original = gc.crop_mask
+
+    def crop_mask(file_src, file_cropped, *args):
+        if file_src.endswith(f"_{BAD}.nii.gz"):
+            try:
+                raise KeyError("voxel_size")
+            except KeyError as cause:
+                exc = RuntimeError("boom")
+                raised.append(exc)
+                raise exc from cause
+        original(file_src, file_cropped, *args)
+
+    monkeypatch.setattr(gc, "crop_mask", crop_mask)
+    return raised
+
+
+@pytest.mark.parametrize("how, exc_type", HOW)
+def test_crop_failure_is_recorded_in_side_skip_list(tmp_path, how, exc_type):
+    """REQ-CTFAIL-BDRABCZUK-96A28A1F9AF7: one entry of the failing subject, step generate_crops, in the list of its
+    side only, with the type and the message of the raised exception."""
+    out = _subject_set_layout(tmp_path, skeleton=("a1", BAD))
+    _break_source(out, "skeleton", BAD, how)
+
+    _crop(tmp_path, out, "skeleton")
+
+    entries = skip_list.load_skip_entries(skip_dir=str(out), side=SIDE)
+    assert [(entry.subject, entry.step, entry.exc_type) for entry in entries] == [(BAD, STEP, exc_type)]
+    assert f"{SIDE}resampled_skeleton_{BAD}.nii.gz" in entries[0].message
+    assert skip_list.load_skip_entries(skip_dir=str(out), side="L") == []
+
+
+def test_crop_failure_error_record_carries_the_raised_exception(tmp_path, raising_crop, caplog):
+    """REQ-CTFAIL-BDRABCZUK-96A28A1F9AF7: record_skip receives the raised exception object itself, so the ERROR
+    record carries its traceback and __cause__ chain."""
+    out = _subject_set_layout(tmp_path, skeleton=("a1", BAD))
+    caplog.set_level(logging.ERROR)
+
+    _crop(tmp_path, out, "skeleton")
+
+    assert len(raising_crop) == 1
+    carried = [record for record in caplog.records if record.exc_info and record.exc_info[1] is raising_crop[0]]
+    assert len(carried) == 1
+    assert carried[0].levelno == logging.ERROR
+    assert isinstance(carried[0].exc_info[1].__cause__, KeyError)
+
+
+def test_crop_failure_without_skip_dir_is_recorded_in_crop_dir(tmp_path):
+    """REQ-CTFAIL-BDRABCZUK-96A28A1F9AF7, REQ-CTFAIL-BDRABCZUK-8FA3023B0E25: called without skip_dir, the crop failure
+    lands in the skip list under the crop_dir argument, and nowhere else."""
+    out = _subject_set_layout(tmp_path, skeleton=("a1", BAD))
+    _break_source(out, "skeleton", BAD)
+
+    _crop_without_skip_dir(tmp_path, out, "skeleton")
+
+    crop_dir = tmp_path / "crops"
+    assert _recorded(crop_dir) == [(BAD, STEP)]
+    assert sorted(tmp_path.rglob("skip_list_*.jsonl")) == [crop_dir / f"skip_list_{SIDE}.jsonl"]
+
+
+@pytest.mark.parametrize("parallel", MODES)
+def test_crop_failure_does_not_stop_the_other_subjects(tmp_path, parallel):
+    """REQ-CTFAIL-BDRABCZUK-370125387C1E: generate_crops returns and the subjects before and after the failing one
+    each get their cropped file; the failing subject gets none."""
+    out = _subject_set_layout(tmp_path, skeleton=("a1", BAD, "c3"))
+    _break_source(out, "skeleton", BAD)
+
+    _crop_in_mode(tmp_path, out, "skeleton", parallel)
+
+    assert _cropped_subjects(tmp_path, "skeleton") == ["a1", "c3"]
+
+
+@pytest.mark.parametrize("how, _exc_type", HOW)
+def test_parallel_crop_failure_is_recorded_in_side_skip_list(tmp_path, how, _exc_type):
+    """REQ-CTFAIL-BDRABCZUK-2A0D318568AD: in a parallel run, the subject failing in a p_map worker is recorded in the
+    side's skip list with step generate_crops, and only that subject."""
+    out = _subject_set_layout(tmp_path, skeleton=("a1", BAD))
+    _break_source(out, "skeleton", BAD, how)
+
+    _crop_in_mode(tmp_path, out, "skeleton", parallel=True)
+
+    assert _recorded(out) == [(BAD, STEP)]
+
+
+@pytest.mark.parametrize("input_type", ["skeleton", "distmap"])
+def test_crop_failure_leaves_subject_out_of_the_stacked_array(tmp_path, input_type):
+    """REQ-CTFAIL-BDRABCZUK-5EB6D1D0FF16: the stacked array and subject CSV of the pass hold the other subjects only."""
+    out = _subject_set_layout(tmp_path, **{kind: ("a1", BAD, "c3") for kind in {"skeleton", input_type}})
+    _break_source(out, input_type, BAD)
+
+    _crop(tmp_path, out, input_type)
+
+    assert _stacked_subjects(tmp_path, input_type) == ["a1", "c3"]
+
+
+def test_skeleton_crop_failure_leaves_subject_out_of_the_foldlabel_pass(tmp_path):
+    """REQ-CTFAIL-BDRABCZUK-5EB6D1D0FF16: a failure of the skeleton pass reaches the foldlabel pass through the skip
+    list: both stacks agree, quality_checks passes and the subject is recorded once."""
+    out = _subject_set_layout(tmp_path, skeleton=("a1", BAD), foldlabel=("a1", BAD))
+    _break_source(out, "skeleton", BAD)
+
+    _crop(tmp_path, out, "skeleton")
+    _crop(tmp_path, out, "foldlabel")
+
+    assert _stacked_subjects(tmp_path, "skeleton") == ["a1"]
+    assert _stacked_subjects(tmp_path, "foldlabel") == ["a1"]
+    assert _recorded(out) == [(BAD, STEP)]
+
+
+def test_crop_failure_deletes_the_file_left_at_the_cropped_path(tmp_path, monkeypatch):
+    """REQ-CTFAIL-BDRABCZUK-440FF32C507C: a write that dies half way leaves a file save_to_numpy could not read; the
+    file is deleted, so the other subjects are stacked."""
+    out = _subject_set_layout(tmp_path, skeleton=("a1", BAD))
+    original = gc.crop_mask
+
+    def crop_mask(file_src, file_cropped, *args):
+        if file_src.endswith(f"_{BAD}.nii.gz"):
+            with open(file_cropped, "wb") as truncated:
+                truncated.write(b"truncated")
+            raise OSError("Disk quota exceeded")
+        original(file_src, file_cropped, *args)
+
+    monkeypatch.setattr(gc, "crop_mask", crop_mask)
+
+    _crop(tmp_path, out, "skeleton")
+
+    assert _cropped_subjects(tmp_path, "skeleton") == ["a1"]
+    assert _stacked_subjects(tmp_path, "skeleton") == ["a1"]
+
+
+@pytest.mark.parametrize("parallel", MODES)
+def test_foldlabel_crop_failure_leaves_subject_out_of_the_skeleton_stack(tmp_path, parallel):
+    """REQ-CTFAIL-BDRABCZUK-6301BEC3C3C3: the skeleton pass stacked the subject before its foldlabel crop failed; the
+    subject leaves the skeleton stack, so quality_checks passes and the foldlabel pass returns."""
+    subjects = ("a1", BAD, "c3")
+    out = _subject_set_layout(tmp_path, skeleton=subjects, foldlabel=subjects)
+    _crop_in_mode(tmp_path, out, "skeleton", parallel)
+    _break_source(out, "foldlabel", BAD)
+
+    _crop_in_mode(tmp_path, out, "foldlabel", parallel)
+
+    assert _stacked_subjects(tmp_path, "skeleton") == ["a1", "c3"]
+    assert _stacked_subjects(tmp_path, "foldlabel") == ["a1", "c3"]
+
+
+def test_extremities_crop_failure_leaves_subject_out_of_the_skeleton_and_foldlabel_stacks(tmp_path):
+    """REQ-CTFAIL-BDRABCZUK-68E295289926: run order of generate_sulcal_regions; both earlier passes stacked the subject
+    before its extremities crop failed; the three stacks agree and quality_checks_extremities passes."""
+    subjects = ("a1", BAD, "c3")
+    out = _subject_set_layout(tmp_path, skeleton=subjects, foldlabel=subjects, extremities=subjects)
+    _crop(tmp_path, out, "skeleton")
+    _crop(tmp_path, out, "foldlabel")
+    _break_source(out, "extremities", BAD)
+
+    _crop(tmp_path, out, "extremities")
+
+    assert _stacked_subjects(tmp_path, "skeleton") == ["a1", "c3"]
+    assert _stacked_subjects(tmp_path, "foldlabel") == ["a1", "c3"]
+    assert _stacked_subjects(tmp_path, "extremities") == ["a1", "c3"]
+
+
+def test_failure_returned_by_a_p_map_worker_is_not_ignored(tmp_path, monkeypatch):
+    """REQ-CTFAIL-BDRABCZUK-828B578D1652: a failure known only from the p_map result, a (subject, reason) pair of
+    protocol P with no skip-list entry behind it, still takes the subject out of the skeleton stack."""
+    out = _subject_set_layout(tmp_path, skeleton=("a1", BAD), foldlabel=("a1", BAD))
+    _crop(tmp_path, out, "skeleton")
+
+    def p_map(worker, subjects, **_):
+        return [(BAD, "worker failure") if subject == BAD else worker(subject) for subject in subjects]
+
+    monkeypatch.setattr(gc, "p_map", p_map)
+
+    _crop_in_mode(tmp_path, out, "foldlabel", parallel=True)
+
+    assert _stacked_subjects(tmp_path, "skeleton") == ["a1"]
+
+
+@pytest.mark.parametrize("parallel", MODES)
+def test_crop_failure_of_every_subject_raises_runtime_error(tmp_path, parallel):
+    """REQ-CTFAIL-BDRABCZUK-1A3EB88ED676: no valid subject left on the side: RuntimeError naming it, after each subject
+    has its own skip-list entry (QC rule: report per subject, fail only if no valid subject remains)."""
+    subjects = ("a1", BAD)
+    out = _subject_set_layout(tmp_path, skeleton=subjects)
+    for subject in subjects:
+        _break_source(out, "skeleton", subject)
+
+    with pytest.raises(RuntimeError, match=rf"\b{SIDE}\b"):
+        _crop_in_mode(tmp_path, out, "skeleton", parallel)
+
+    assert sorted(_recorded(out)) == [("a1", STEP), (BAD, STEP)]
+
+
+def test_foldlabel_crop_failure_of_every_subject_raises_runtime_error(tmp_path):
+    """REQ-CTFAIL-BDRABCZUK-1A3EB88ED676: the foldlabel pass emptying the side raises although the skeleton pass
+    stacked its subjects."""
+    subjects = ("a1", BAD)
+    out = _subject_set_layout(tmp_path, skeleton=subjects, foldlabel=subjects)
+    _crop(tmp_path, out, "skeleton")
+    for subject in subjects:
+        _break_source(out, "foldlabel", subject)
+
+    with pytest.raises(RuntimeError, match=rf"\b{SIDE}\b"):
+        _crop(tmp_path, out, "foldlabel")
+
+
+def test_skip_list_covering_every_subject_raises_runtime_error(tmp_path):
+    """REQ-CTFAIL-BDRABCZUK-1A3EB88ED676: subjects all skip-listed by earlier steps leave an empty stack: same error."""
+    subjects = ("a1", BAD)
+    out = _subject_set_layout(tmp_path, skeleton=subjects)
+    for subject in subjects:
+        _skip(out, subject)
+
+    with pytest.raises(RuntimeError, match=rf"\b{SIDE}\b"):
+        _crop(tmp_path, out, "skeleton")
+
+
+@pytest.mark.parametrize("parallel", MODES)
+def test_record_skip_failure_is_propagated(tmp_path, parallel):
+    """REQ-CTFAIL-BDRABCZUK-28E451D54A18: a skip list that cannot be written stops the run with the record_skip
+    exception: a subject is never dropped without its entry."""
+    out = _subject_set_layout(tmp_path, skeleton=("a1", BAD))
+    _break_source(out, "skeleton", BAD)
+    read_only = tmp_path / "read_only"
+    read_only.mkdir()
+    read_only.chmod(0o500)
+    try:
+        with pytest.raises(PermissionError):
+            _crop_in_mode(tmp_path, out, "skeleton", parallel, skip_dir=read_only)
+    finally:
+        read_only.chmod(0o700)
