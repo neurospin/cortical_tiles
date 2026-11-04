@@ -13,7 +13,7 @@ from cortical_tiles.brainvisa.utils.crop_subjects import \
     NoValidSubjectError, exclude_empty_crops, mirror_empty_crops
 from cortical_tiles.brainvisa.utils.folder import get_nth_parent_dir
 from cortical_tiles.brainvisa.utils.skip_list import \
-    clear_skip_list, load_skip_entries, load_skipped
+    clear_skip_list, load_skip_entries, load_skipped, session_key
 from cortical_tiles.brainvisa.utils.subjects import \
     is_it_a_subject, select_good_qc
 
@@ -306,13 +306,28 @@ def generate_sulcal_regions(regions, sides, input_types,
         resolved_config, regions, sides, input_types, njobs)
 
 
+def _keeps_a_session(config, side, subject, skipped):
+    """Tells if a graph key of subject lies outside skipped, or subject has no graph"""
+    graphs = glob.glob(
+        f"{config['graphs_dir']}/{subject}/{config['path_to_graph']}/{side}*.arg")
+    keys = {session_key(subject, graph, True) for graph in graphs}
+    return not keys or bool(keys - skipped)
+
+
 def valid_subjects(config, side):
-    """Returns the subjects of graphs_dir kept by QC and absent from the skip list of side"""
+    """Returns the subjects of graphs_dir kept by QC and absent from the skip list of side
+
+    In BIDS mode a subject also needs one graph key outside the skip list.
+    """
     names = [basename(path)
              for path in glob.glob(f"{config['graphs_dir']}/*")
              if is_it_a_subject(path)]
     kept = select_good_qc(names, config.get("skel_qc_path", ""))
-    return set(kept) - load_skipped(config["output_dir"], side)
+    skipped = load_skipped(config["output_dir"], side)
+    if not config.get("bids"):
+        return set(kept) - skipped
+    return {subject for subject in kept if subject not in skipped
+            and _keeps_a_session(config, side, subject, skipped)}
 
 
 def _log_side_summary(side, side_entries, clause):

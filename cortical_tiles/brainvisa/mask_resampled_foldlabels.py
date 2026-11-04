@@ -71,7 +71,8 @@ from cortical_tiles.brainvisa.utils.subjects import get_number_subjects
 from cortical_tiles.brainvisa.utils.subjects import select_subjects_int
 from cortical_tiles.brainvisa.utils.folder import create_folder
 from cortical_tiles.brainvisa.utils.logs import setup_log
-from cortical_tiles.brainvisa.utils.skip_list import load_skipped, record_skip
+from cortical_tiles.brainvisa.utils.skip_list import \
+    covered_by, load_skipped, record_skip
 from cortical_tiles.brainvisa.utils.quality_checks import \
     compare_number_aims_files_with_expected, \
     compare_number_aims_files_with_number_in_source, \
@@ -239,12 +240,13 @@ class FoldLabelMasker:
                     for dI in not_processed_files]
                 list_not_processed_subjects = [
                     s for s in list_not_processed_subjects
-                    if s not in skipped]
+                    if not covered_by(s, skipped)]
                 list_all_subjects = [
                     re.search(self.expr, basename(dI))[1]
                     for dI in src_files]
                 list_all_subjects = [
-                    s for s in list_all_subjects if s not in skipped]
+                    s for s in list_all_subjects
+                    if not covered_by(s, skipped)]
             else:
                 raise NotADirectoryError(
                     f"{self.src_dir} doesn't exist or is not a directory")

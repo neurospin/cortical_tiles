@@ -28,7 +28,8 @@ from os.path import abspath, basename, dirname, join
 import numpy as np
 import pandas as pd
 
-from cortical_tiles.brainvisa.utils.skip_list import SKIP_SIDES, load_skip_entries, record_skip
+from cortical_tiles.brainvisa.utils.skip_list import \
+    SKIP_SIDES, load_skip_entries, record_skip, subject_form
 from cortical_tiles.brainvisa.utils.subjects import select_good_qc
 
 # Named set "run stacks": (stack, sample directory, cropped file kind)
@@ -40,8 +41,6 @@ _RUN_STACKS = (
     ("distbottom", "distbottom", "distbottom"),
 )
 _SAMPLE_DIRS = {kind: sample_dir for _, sample_dir, kind in _RUN_STACKS}
-# Named set "session parts": the suffixes get_skeleton_filename appends
-_SESSION_PARTS = re.compile(r"(_(ses|acq|run)-[^_/]+)+$")
 
 
 class NoValidSubjectError(RuntimeError):
@@ -171,11 +170,6 @@ def record_one_sided_subjects(src_dir, side, skip_dir, step, excluded):
             f"no resampled {missing} file of side {side} for subject "
             f"{subject} (searched {side_dirs[missing]})"))
     return one_sided
-
-
-def subject_form(key):
-    """Returns a subject key without its trailing session parts"""
-    return _SESSION_PARTS.sub("", key)
 
 
 def qc_removed_subjects(qc_path, keys):

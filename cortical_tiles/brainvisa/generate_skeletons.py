@@ -65,7 +65,7 @@ from cortical_tiles.brainvisa.utils.subjects import \
 from cortical_tiles.brainvisa.utils.logs import setup_log
 from cortical_tiles.brainvisa.utils.parallel import define_njobs
 from cortical_tiles.brainvisa.utils.skip_list import \
-    load_skipped, record_skip
+    load_skipped, record_skip, session_key
 from cortical_tiles.brainvisa.utils.skeleton import \
     generate_skeleton_from_graph_file
 from cortical_tiles.brainvisa.utils.quality_checks import \
@@ -189,32 +189,24 @@ class GraphConvert2Skeleton:
         self.bids = bids
         self.skeleton_dir = f"{self.skeleton_dir}/{self.side}"
         self.njobs = njobs
+        self.skipped_keys = frozenset()
         create_folder(abspath(self.skeleton_dir))
 
     def get_skeleton_filename(self, subject, graph_file):
-        skeleton_file = f"{self.skeleton_dir}/" + \
-                        f"{self.side}skeleton_generated_{subject}"
-        if self.bids:
-            session = re.search("ses-([^_/]+)", graph_file)
-            acquisition = re.search("acq-([^_/]+)", graph_file)
-            run = re.search("run-([^_/]+)", graph_file)
-            if session:
-                skeleton_file += f"_{session[0]}"
-            if acquisition:
-                skeleton_file += f"_{acquisition[0]}"
-            if run:
-                skeleton_file += f"_{run[0]}"
-        skeleton_file += ".nii.gz"
-        return skeleton_file
+        key = session_key(subject, graph_file, self.bids)
+        return (f"{self.skeleton_dir}/"
+                f"{self.side}skeleton_generated_{key}.nii.gz")
 
     def generate_one_skeleton(self, subject: str):
         """Generates and writes skeleton for one subject.
 
-        A failure is recorded in the side's skip list under skip_dir.
+        A failure is recorded in the side's skip list under skip_dir, with the
+        key of the graph file; in BIDS mode the other graph files go on, and a
+        graph file whose key was listed when the run started is left out.
 
         Returns:
             None on success, (subject, graph glob pattern) when no graph
-            file is found, (subject, None) when the conversion raised.
+            file is found, (subject, None) when a conversion raised.
         """
         graph_path = f"{self.src_dir}/{subject}/" +\
                      f"{self.path_to_graph}/{self.side}*.arg"
@@ -225,8 +217,12 @@ class GraphConvert2Skeleton:
                                     f"(expected: {graph_path})")
             record_skip(self.skip_dir, self.side, _STEP, subject, exc)
             return (subject, graph_path)
-        try:
-            for graph_file in list_graph_file:
+        failed = False
+        for graph_file in list_graph_file:
+            key = session_key(subject, graph_file, self.bids)
+            if self.bids and key in self.skipped_keys:
+                continue
+            try:
                 skeleton_file = self.get_skeleton_filename(subject,
                                                            graph_file)
                 if not exists(skeleton_file):
@@ -234,17 +230,18 @@ class GraphConvert2Skeleton:
                         graph_file,
                         skeleton_file,
                         self.junction)
-                if not self.bids:
-                    break
-        except Exception as exc:
-            record_skip(self.skip_dir, self.side, _STEP, subject, exc)
-            return (subject, None)
-        return None
+            except Exception as exc:
+                record_skip(self.skip_dir, self.side, _STEP, key, exc)
+                failed = True
+            if not self.bids:
+                break
+        return (subject, None) if failed else None
 
     def compute(self, nb_subjects):
         """Loops over subjects and converts graphs into skeletons.
         """
         skipped_before = load_skipped(self.skip_dir, self.side)
+        self.skipped_keys = frozenset(skipped_before)
         # Gets list of subjects
         filenames = glob.glob(f"{self.src_dir}/*")
         list_subjects = [basename(filename) for filename in filenames

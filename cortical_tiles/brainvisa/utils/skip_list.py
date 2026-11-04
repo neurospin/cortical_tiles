@@ -5,6 +5,10 @@ traceback, ``__cause__`` chain included) and appends it to the skip list of
 its side; ``load_skipped`` and ``load_skip_entries`` read that list back and
 ``clear_skip_list`` empties the list of one side.
 
+An entry holds a key: ``session_key`` gives the key of one graph file,
+``subject_form`` the key without its session parts, and ``covered_by`` is the
+one rule matching a key against a set of entries or of names.
+
 Storage: one JSON Lines file per side, ``<skip_dir>/skip_list_<side>.jsonl``,
 one ASCII-escaped JSON object per line. Writers append one line under an
 exclusive ``fcntl.flock``; readers read under a shared lock, so concurrent
@@ -14,6 +18,7 @@ workers on one node never tear or lose an entry.
 import fcntl
 import json
 import os
+import re
 from dataclasses import dataclass
 
 from cortical_tiles.config.logs import set_file_logger
@@ -31,7 +36,10 @@ SKIP_STEPS = (
 )
 SKIP_SIDES = ("L", "R")
 SKIP_LIST_FILENAME = "skip_list_{side}.jsonl"
+# Named set "session parts": the suffix of a BIDS key, in key order
+SESSION_PARTS = ("ses", "acq", "run")
 
+_TRAILING_SESSION_PARTS = re.compile(rf"(_({'|'.join(SESSION_PARTS)})-[^_/]+)+$")
 _ENTRY_KEYS = frozenset(("subject", "step", "exc_type", "message"))
 
 
@@ -43,6 +51,28 @@ class SkipEntry:
     step: str
     exc_type: str
     message: str
+
+
+def session_key(subject, graph_file, bids):
+    """Returns the key of one graph file of ``subject``.
+
+    It is ``subject`` outside BIDS mode; in BIDS mode, ``subject`` followed by
+    the first match of each of SESSION_PARTS in the whole path of ``graph_file``.
+    """
+    if not bids:
+        return subject
+    matches = (re.search(rf"{part}-[^_/]+", graph_file) for part in SESSION_PARTS)
+    return "_".join([subject, *(match[0] for match in matches if match)])
+
+
+def subject_form(key):
+    """Returns a subject key without its trailing session parts."""
+    return _TRAILING_SESSION_PARTS.sub("", key)
+
+
+def covered_by(key, names):
+    """Tells if ``names`` holds ``key`` or its subject form."""
+    return key in names or subject_form(key) in names
 
 
 def _check_side(side):

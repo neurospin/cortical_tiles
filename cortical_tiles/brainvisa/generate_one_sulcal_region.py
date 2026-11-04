@@ -55,7 +55,7 @@ from cortical_tiles.brainvisa.utils.sulcus import complete_sulci_name
 from cortical_tiles.brainvisa.utils.folder import get_nth_parent_dir
 from cortical_tiles.brainvisa.utils.crop_subjects import NoValidSubjectError
 from cortical_tiles.brainvisa.utils.skip_list import SKIP_LIST_FILENAME, \
-    load_skipped
+    covered_by, load_skipped
 
 from cortical_tiles.brainvisa.compute_mask import compute_mask
 from cortical_tiles.brainvisa.generate_crops import generate_crops
@@ -178,18 +178,19 @@ def check_if_number_skeletons_equals_number_foldlabels(
         resampled_dir, skeleton_dir, side, skip_dir):
     """Compares the resampled skeletons and foldlabels of one side
 
-    Subjects of the skip list of side are left out of both sets. Logs one
+    Keys the skip list of side covers are left out of both sets. Logs one
     warning per subject holding only one of the two volumes.
 
     Raises:
         NoValidSubjectError: no subject has both resampled volumes.
     """
     skipped = load_skipped(skip_dir, side)
-    skeletons = _resampled_subjects(
-        os.path.join(skeleton_dir, side), side, "skeleton") - skipped
-    foldlabels = _resampled_subjects(
+    skeletons = {key for key in _resampled_subjects(
+        os.path.join(skeleton_dir, side), side, "skeleton")
+        if not covered_by(key, skipped)}
+    foldlabels = {key for key in _resampled_subjects(
         os.path.join(resampled_dir, f"{side}_before_masking"),
-        side, "foldlabel") - skipped
+        side, "foldlabel") if not covered_by(key, skipped)}
     for subject in sorted(skeletons ^ foldlabels):
         missing = "foldlabel" if subject in skeletons else "skeleton"
         log.warning("Subject %s of side %s has no resampled %s volume",

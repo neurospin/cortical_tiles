@@ -65,7 +65,8 @@ from cortical_tiles.brainvisa.utils.parallel import define_njobs
 from cortical_tiles.brainvisa.utils.quality_checks import \
     compare_number_aims_files_with_expected, \
     get_not_processed_subjects_transform
-from cortical_tiles.brainvisa.utils.skip_list import load_skipped, record_skip
+from cortical_tiles.brainvisa.utils.skip_list import \
+    load_skipped, record_skip, session_key
 from pqdm.processes import pqdm
 from cortical_tiles.config.logs import set_file_logger
 from soma import aims
@@ -168,21 +169,8 @@ def get_transform_filename(side_transform_dir, side, subject, graph_file, bids):
     (i.e. <transform_dir>/<side>), matching GraphGenerateTransform's own
     self.transform_dir layout.
     """
-    transform_file = (
-        f"{side_transform_dir}/"
-        f"{side}transform_to_ICBM2009c_{subject}")
-    if bids:
-        session = re.search("ses-([^_/]+)", graph_file)
-        acquisition = re.search("acq-([^_/]+)", graph_file)
-        run = re.search("run-([^_/]+)", graph_file)
-        if session:
-            transform_file += f"_{session[0]}"
-        if acquisition:
-            transform_file += f"_{acquisition[0]}"
-        if run:
-            transform_file += f"_{run[0]}"
-    transform_file += ".trm"
-    return transform_file
+    key = session_key(subject, graph_file, bids)
+    return f"{side_transform_dir}/{side}transform_to_ICBM2009c_{key}.trm"
 
 
 class GraphGenerateTransform:
@@ -205,15 +193,19 @@ class GraphGenerateTransform:
         self.bids = bids
         self.qc_path = qc_path
         self.transform_dir = f"{self.transform_dir}/{self.side}"
+        self.skipped_keys = frozenset()
         create_folder(abspath(self.transform_dir))
 
     def generate_one_transform(self, subject: str):
         """Generates and writes ICBM2009c transform for one subject.
 
         Returns (subject, None) on success or (subject, error_message) on
-        failure so that compute() can collect a per-subject report without
-        crashing the whole batch. A failure is recorded with record_skip
-        (in this process, with the raised exception) in the side's skip list.
+        failure, error_message being the first failure of the subject, so
+        that compute() can collect a per-subject report without crashing the
+        whole batch. A failure is recorded with record_skip (in this process,
+        with the raised exception) in the side's skip list, with the key of
+        the graph file; in BIDS mode the other graph files go on, and a graph
+        file whose key was listed when the run started is left out.
         """
         graph_path = f"{self.src_dir}/{subject}*/" +\
                      f"{self.path_to_graph}/{self.side}*.arg"
@@ -225,8 +217,12 @@ class GraphGenerateTransform:
                 f"No graph file: {graph_path} doesn't exist")
             record_skip(self.skip_dir, self.side, _STEP, subject, exc)
             return (subject, str(exc))
-        try:
-            for graph_file in list_graph_file:
+        first_failure = None
+        for graph_file in list_graph_file:
+            key = session_key(subject, graph_file, self.bids)
+            if self.bids and key in self.skipped_keys:
+                continue
+            try:
                 transform_file = self.get_transform_filename(
                     subject, graph_file)
                 if not exists(transform_file):
@@ -234,12 +230,12 @@ class GraphGenerateTransform:
                     g_to_icbm_template = \
                         aims.GraphManip.getICBM2009cTemplateTransform(graph)
                     aims.write(g_to_icbm_template, transform_file)
-                if not self.bids:
-                    break
-        except Exception as exc:
-            record_skip(self.skip_dir, self.side, _STEP, subject, exc)
-            return (subject, str(exc))
-        return (subject, None)
+            except Exception as exc:
+                record_skip(self.skip_dir, self.side, _STEP, key, exc)
+                first_failure = str(exc) if first_failure is None else first_failure
+            if not self.bids:
+                break
+        return (subject, first_failure)
 
     def get_transform_filename(self, subject, graph_file):
         return get_transform_filename(
@@ -255,6 +251,7 @@ class GraphGenerateTransform:
         log.info(f"Number of subjects before qc = {len(list_subjects)}")
         list_subjects = select_good_qc(list_subjects, self.qc_path)
         skipped = load_skipped(self.skip_dir, self.side)
+        self.skipped_keys = frozenset(skipped)
         list_subjects = [s for s in list_subjects if s not in skipped]
         not_processed_subjects = \
             get_not_processed_subjects_transform(list_subjects,
