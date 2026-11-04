@@ -64,6 +64,8 @@ from cortical_tiles.brainvisa.utils.subjects import \
     select_subjects_int, select_good_qc
 from cortical_tiles.brainvisa.utils.logs import setup_log
 from cortical_tiles.brainvisa.utils.parallel import define_njobs
+from cortical_tiles.brainvisa.utils.skip_list import \
+    load_skipped, record_skip
 from cortical_tiles.brainvisa.utils.skeleton import \
     generate_skeleton_from_graph_file
 from cortical_tiles.brainvisa.utils.quality_checks import \
@@ -81,6 +83,9 @@ from cortical_tiles.brainvisa.utils.constants import \
 
 # Defines logger
 log = set_file_logger(__file__)
+
+# Step name of this module in the skip list (one of SKIP_STEPS)
+_STEP = "generate_skeletons"
 
 
 def parse_args(argv):
@@ -172,8 +177,9 @@ class GraphConvert2Skeleton:
 
     def __init__(self, src_dir, skeleton_dir,
                  side, junction, parallel,
-                 path_to_graph, bids, qc_path, njobs):
+                 path_to_graph, bids, qc_path, njobs, skip_dir=None):
         self.src_dir = src_dir
+        self.skip_dir = skeleton_dir if skip_dir is None else skip_dir
         self.skeleton_dir = skeleton_dir
         self.side = side
         self.qc_path = qc_path
@@ -203,34 +209,49 @@ class GraphConvert2Skeleton:
 
     def generate_one_skeleton(self, subject: str):
         """Generates and writes skeleton for one subject.
+
+        A failure is recorded in the side's skip list under skip_dir.
+
+        Returns:
+            None on success, (subject, graph glob pattern) when no graph
+            file is found, (subject, None) when the conversion raised.
         """
         graph_path = f"{self.src_dir}/{subject}/" +\
                      f"{self.path_to_graph}/{self.side}*.arg"
         list_graph_file = glob.glob(graph_path)
         log.debug(f"list_graph_file = {list_graph_file}")
         if len(list_graph_file) == 0:
-            log.warning(f"No graph file for subject {subject} — skipping. "
-                        f"(expected: {graph_path})")
+            exc = FileNotFoundError(f"No graph file for subject {subject} "
+                                    f"(expected: {graph_path})")
+            record_skip(self.skip_dir, self.side, _STEP, subject, exc)
             return (subject, graph_path)
-        for graph_file in list_graph_file:
-            skeleton_file = self.get_skeleton_filename(subject, graph_file)
-            if not exists(skeleton_file):
-                generate_skeleton_from_graph_file(
-                    graph_file,
-                    skeleton_file,
-                    self.junction)
-            if not self.bids:
-                break
+        try:
+            for graph_file in list_graph_file:
+                skeleton_file = self.get_skeleton_filename(subject,
+                                                           graph_file)
+                if not exists(skeleton_file):
+                    generate_skeleton_from_graph_file(
+                        graph_file,
+                        skeleton_file,
+                        self.junction)
+                if not self.bids:
+                    break
+        except Exception as exc:
+            record_skip(self.skip_dir, self.side, _STEP, subject, exc)
+            return (subject, None)
+        return None
 
     def compute(self, nb_subjects):
         """Loops over subjects and converts graphs into skeletons.
         """
+        skipped_before = load_skipped(self.skip_dir, self.side)
         # Gets list of subjects
         filenames = glob.glob(f"{self.src_dir}/*")
         list_subjects = [basename(filename) for filename in filenames
                          if is_it_a_subject(filename)]
         log.info(f"Number of subjects before qc = {len(list_subjects)}")
         list_subjects = select_good_qc(list_subjects, self.qc_path)
+        list_subjects = [s for s in list_subjects if s not in skipped_before]
         not_processed_subjects = \
             get_not_processed_subjects(list_subjects, self.skeleton_dir)
 
@@ -255,9 +276,13 @@ class GraphConvert2Skeleton:
                 "without parallelism")
             results = [self.generate_one_skeleton(sub) for sub in list_subjects]
 
-        skipped = [r for r in results if r is not None]
+        for r in results:
+            if isinstance(r, BaseException):
+                raise r
+        failed = [r for r in results if r is not None]
+        skipped = [r for r in failed if r[1] is not None]
         n_total = len(list_subjects)
-        n_skipped = len(skipped)
+        n_skipped = len(failed)
         n_ok = n_total - n_skipped
 
         # Always print a per-side summary to stdout
@@ -306,7 +331,8 @@ def generate_skeletons(
         parallel=False,
         nb_subjects=_ALL_SUBJECTS,
         qc_path=_QC_PATH_DEFAULT,
-        njobs=_NB_JOBS_DEFAULT):
+        njobs=_NB_JOBS_DEFAULT,
+        skip_dir=None):
     """Generates skeletons from graphs"""
 
     # Gets function arguments and values
