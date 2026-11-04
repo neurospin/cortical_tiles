@@ -13,6 +13,7 @@ behaviour that looks defective (flagged "DEFECT" below); they are recorded, not 
 rule of TASK-114).
 """
 
+import inspect
 import json
 import os
 
@@ -37,6 +38,35 @@ STEP_FUNCTIONS = [
 ]
 
 CROP_SUBDIR = {"skeleton": "crops", "foldlabel": "labels", "distmap": "distmaps", "extremities": "extremitiess"}
+
+# The real functions, kept before the `calls` fixture replaces them, for their signatures.
+SKIP_DIR_STEPS = {
+    name: getattr(gosr, name)
+    for name in (
+        "generate_skeletons",
+        "generate_foldlabels",
+        "generate_ICBM2009c_transforms",
+        "resample_files",
+        "mask_foldlabel_files",
+        "generate_crops",
+    )
+}
+
+# (input_type, out_voxel_size) -> the steps of SKIP_DIR_STEPS that run_with_params calls for it.
+SKIP_DIR_RUNS = {
+    ("skeleton", 2.0): ("generate_skeletons", "generate_ICBM2009c_transforms", "resample_files", "generate_crops"),
+    ("distmap", 2.0): ("generate_skeletons", "generate_ICBM2009c_transforms", "resample_files", "generate_crops"),
+    ("foldlabel", 2.0): (
+        "generate_foldlabels",
+        "generate_ICBM2009c_transforms",
+        "resample_files",
+        "mask_foldlabel_files",
+        "generate_crops",
+    ),
+    ("extremities", 2.0): ("generate_ICBM2009c_transforms", "resample_files", "generate_crops"),
+    ("skeleton", "raw"): ("generate_skeletons", "generate_crops"),
+    ("foldlabel", "raw"): ("generate_foldlabels", "generate_crops"),
+}
 
 
 @pytest.fixture
@@ -320,3 +350,24 @@ def test_run_with_params_clear_and_compute_without_distbottom_dir_computes_distb
     names = [name for name, _ in calls]
     assert "generate_crops" in names
     assert "generate_distbottom_crops" in names
+
+
+# --- REQ-CTFAIL-BDRABCZUK-7062EA551CE0: one shared per-side skip list ------------------------------
+
+
+@pytest.mark.parametrize("side", ["R", "L"])
+@pytest.mark.parametrize(
+    "input_type, out_voxel_size, step",
+    [(input_type, size, step) for (input_type, size), steps in SKIP_DIR_RUNS.items() for step in steps],
+)
+def test_run_with_params_passes_output_dir_as_skip_dir(
+    tmp_path, regions_json, calls, input_type, out_voxel_size, step, side
+):
+    """REQ-CTFAIL-BDRABCZUK-7062EA551CE0: a step of the skip-list set receives skip_dir=<output_dir>."""
+    params = _params(tmp_path, regions_json, input_type=input_type, out_voxel_size=out_voxel_size, side=side)
+    gosr.run_with_params(params)
+
+    (kwargs,) = _called(calls, step)
+    assert kwargs.get("skip_dir") == params["output_dir"]
+    # The recorders take any keyword: the real signature must accept what run_with_params passes.
+    inspect.signature(SKIP_DIR_STEPS[step]).bind(**kwargs)

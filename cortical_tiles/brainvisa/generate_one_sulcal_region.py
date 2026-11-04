@@ -357,7 +357,8 @@ def run_with_params(params: dict):
                 'parallel': params['parallel'],
                 'nb_subjects': params['nb_subjects'],
                 'qc_path': params.get('skel_qc_path', ''),
-                'njobs': params['njobs']}
+                'njobs': params['njobs'],
+                'skip_dir': params['output_dir']}
 
             setup_log(
                 Namespace(**{'verbose': log.level,
@@ -468,7 +469,8 @@ def run_with_params(params: dict):
                 'bids': params['bids'],
                 'parallel': params['parallel'],
                 'nb_subjects': params['nb_subjects'],
-                'qc_path': params['skel_qc_path']}
+                'qc_path': params['skel_qc_path'],
+                'skip_dir': params['output_dir']}
 
             setup_log(Namespace(**{'verbose': log.level,
                                    **args_generate_foldlabels}),
@@ -506,7 +508,8 @@ def run_with_params(params: dict):
                 'bids': params['bids'],
                 'parallel': params['parallel'],
                 'nb_subjects': params['nb_subjects'],
-                'qc_path': params['skel_qc_path']}
+                'qc_path': params['skel_qc_path'],
+                'skip_dir': params['output_dir']}
 
             setup_log(
                 Namespace(**{'verbose': log.level,
@@ -567,7 +570,8 @@ def run_with_params(params: dict):
                                    'parallel': params['parallel'],
                                    'src_filename': src_filename,
                                    'output_filename': output_filename,
-                                   'skel_seed': params.get('skel_seed', DEFAULT_SKEL_SEED)}
+                                   'skel_seed': params.get('skel_seed', DEFAULT_SKEL_SEED),
+                                   'skip_dir': params['output_dir']}
 
             setup_log(
                 Namespace(**{'verbose': log.level,
@@ -604,7 +608,8 @@ def run_with_params(params: dict):
                                      'masked_dir': masked_dir,
                                      'side': params['side'],
                                      'nb_subjects': params['nb_subjects'],
-                                     'parallel': params['parallel']}
+                                     'parallel': params['parallel'],
+                                     'skip_dir': params['output_dir']}
 
                 setup_log(Namespace(**{'verbose': log.level,
                                     **args_masked_files}),
@@ -703,7 +708,8 @@ def run_with_params(params: dict):
             'no_mask': params['no_mask'],
             'threshold': params['threshold'],
             'dilation': params['dilation'],
-            'njobs': params['njobs']}
+            'njobs': params['njobs'],
+            'skip_dir': params['output_dir']}
 
         setup_log(Namespace(**{'verbose': log.level, **args_generate_crops}),
                   log_dir=f"{args_generate_crops['crop_dir']}",
