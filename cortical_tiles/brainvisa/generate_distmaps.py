@@ -166,16 +166,42 @@ class SkelConvert2DistMap:
         distmap_file = f"{self.distmap_dir}/" +\
             f"{self.side}distmap_generated_{subject}.nii.gz"
 
+        skeleton_file = self.find_skeleton_file(subject)
         if self.resampled_skel:
-            skeleton_file = glob.glob(f"{self.src_dir}/" +
-                                      f"*{subject}*.nii.gz")[0]
             generate_distmap_from_resampled_skeleton(skeleton_file,
                                                      distmap_file)
         else:
-            skeleton_file = glob.glob(f"{self.src_dir}/{self.side}/" +
-                                      f"*{subject}*.nii.gz")[0]
             generate_distmap_from_skeleton_file(skeleton_file,
                                                 distmap_file)
+
+    def find_skeleton_file(self, subject: str) -> str:
+        """Returns the one skeleton file whose subject id is exactly subject.
+
+        Raw mode: the file is {side}skeleton_generated_{subject}.nii.gz.
+        Resampled mode: the file stem equals subject or ends with
+        _{subject}, so sub-1 never matches a file of sub-10.
+        Raises ValueError when no file or several files match.
+        """
+        suffix = ".nii.gz"
+        if self.resampled_skel:
+            search_dir = self.src_dir
+            candidates = glob.glob(f"{glob.escape(search_dir)}/*{suffix}")
+            matches = []
+            for path in candidates:
+                stem = basename(path)[:-len(suffix)]
+                if stem == subject or stem.endswith(f"_{subject}"):
+                    matches.append(path)
+        else:
+            search_dir = f"{self.src_dir}/{self.side}"
+            name = f"{self.side}skeleton_generated_{subject}{suffix}"
+            matches = glob.glob(f"{glob.escape(search_dir)}/" +
+                                glob.escape(name))
+        matches = sorted(matches)
+        if len(matches) != 1:
+            raise ValueError(
+                f"Subject {subject}: {len(matches)} skeleton files match "
+                f"this exact id in {search_dir} (expected exactly 1)")
+        return matches[0]
 
     def compute(self, number_subjects):
         """Loops over subjects and converts graphs into distmaps.
