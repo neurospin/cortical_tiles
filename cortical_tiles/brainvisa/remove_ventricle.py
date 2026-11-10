@@ -358,6 +358,10 @@ class RemoveVentricleFromVolume:
         """Returns the .trm path for one subject/side, matching what
         generate_ICBM2009c_transforms wrote at self.transform_dir."""
         subject_id = _get_subject_id(subject)
+        if self.bids:
+            # session_key adds the session parts from graph_file: pass the
+            # subject folder id, not the session key, so they appear once.
+            subject_id = subject_id.partition("_")[0]
         side_transform_dir = join(self.transform_dir, side)
         return get_transform_filename(
             side_transform_dir, side, subject_id, graph_file, self.bids)
