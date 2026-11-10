@@ -161,7 +161,7 @@ def increment_mask(subjects: list,
         # It substitutes 'subject' in graph_file name
         graph_file = sub['graph_file'] % sub
         # It looks for a graph file .arg
-        list_graph_file = glob.glob(join(sub['dir'], graph_file))
+        list_graph_file = sorted(glob.glob(join(sub['dir'], graph_file)))
         if len(list_graph_file) == 0:
             raise RuntimeError(f"No graph file! "
                                f"{sub['dir']} doesn't contain {graph_file}")
