@@ -107,14 +107,17 @@ def test_transform_negative_ventricle_index_raises_out_of_bounds_error():
         rv.remove_ventricle_from_graph(_volume(), graph, transform=aims.AffineTransformation3d())
 
 
-# --- REQ-CTILESTEST-144: BIDS labelled-graph path -------------------------------------------------
+# --- REQ-CTILESTEST-144, superseded by REQ-INPUTKIND-BDRABCZUK-E5EAC57DD8B1: BIDS labelled-graph path ----------
 
 
-def _remover(tmp_path, side="L", bids=True, path_to_graph="t1mri/*/default_analysis/folds/3.1"):
+_BIDS_PATH_TO_GRAPH = "t1mri/*/default_analysis/folds/3.1"
+
+
+def _remover(tmp_path, side="L", bids=True, path_to_graph=_BIDS_PATH_TO_GRAPH, morpho_dir="/morpho"):
     return rv.RemoveVentricleFromVolume(
         src_dir=str(tmp_path / "src"),
         output_dir=str(tmp_path / "out"),
-        morpho_dir="/morpho",
+        morpho_dir=str(morpho_dir),
         path_to_graph=path_to_graph,
         labelling_session=LABELLING_SESSION,
         src_filename="skeleton_generated_",
@@ -125,28 +128,67 @@ def _remover(tmp_path, side="L", bids=True, path_to_graph="t1mri/*/default_analy
     )
 
 
+def _graph_folders(morpho_dir, sub_id, folders):
+    """Lay out <morpho_dir>/<sub_id>/t1mri/<folder>/default_analysis/folds/3.1 per folder; return them by name."""
+    paths = {}
+    for folder in folders:
+        path = morpho_dir / sub_id / _BIDS_PATH_TO_GRAPH.replace("*", folder)
+        path.mkdir(parents=True)
+        paths[folder] = path
+    return paths
+
+
 @pytest.mark.parametrize(
-    "subject, sub_id, keys",
+    "subject, sub_id, folder",
     [
         ("sub-01_ses-1_run-2", "sub-01", "ses-1_run-2"),
         ("_sub-01_ses-1", "sub-01", "ses-1"),  # leading '_' stripped first
-        ("sub-02", "sub-02", ""),  # no session/acquisition/run
+        ("sub-02", "sub-02", "default_acquisition"),  # no session/acquisition/run
+        ("sub-03_run-1", "sub-03", "rec-x_run-1"),  # entity outside the key
+        ("sub-04_ses-2_run-1", "sub-04", "run-1_ses-2"),  # non-canonical order
     ],
 )
-def test_bids_labelled_graph_path_replaces_star_by_keys(tmp_path, subject, sub_id, keys):
-    """REQ-CTILESTEST-144: BIDS graph = <morpho>/<id>/<path_to_graph, '*'->keys>/<session>/<side><id>_<session>.arg."""
-    remover = _remover(tmp_path, side="F")
-    expected = [
-        os.path.join(
-            "/morpho",
-            sub_id,
-            f"t1mri/{keys}/default_analysis/folds/3.1",
-            LABELLING_SESSION,
-            f"{side}{sub_id}_{LABELLING_SESSION}.arg",
-        )
-        for side in ("L", "R")
-    ]
+def test_bids_labelled_graph_is_in_the_folder_of_the_subject_key(tmp_path, subject, sub_id, folder):
+    """REQ-INPUTKIND-BDRABCZUK-E5EAC57DD8B1: the one folder whose session_key is the subject, not '*' -> keys.
+
+    A sibling folder of another key lies beside it, so a path built from any folder but the right one fails.
+    """
+    morpho_dir = tmp_path / "morpho"
+    found = _graph_folders(morpho_dir, sub_id, [folder, "ses-9"])[folder]
+    remover = _remover(tmp_path, side="F", morpho_dir=morpho_dir)
+    expected = [str(found / LABELLING_SESSION / f"{side}{sub_id}_{LABELLING_SESSION}.arg") for side in ("L", "R")]
     assert remover.get_labelled_graph(subject) == expected
+
+
+@pytest.mark.parametrize(
+    "folders",
+    [["ses-2"], ["ses-1_rec-a", "ses-1_rec-b"], ["ses-1", "ses-1_rec-a"]],
+    ids=["no_folder_of_the_key", "two_folders_of_the_key", "key_text_folder_and_another_folder_of_the_key"],
+)
+def test_bids_subject_without_single_key_folder_logs_error(tmp_path, caplog, monkeypatch, folders):
+    """REQ-INPUTKIND-BDRABCZUK-EE754EE8422C: none or several folders of the key -> one error, no output, no raise.
+
+    Every folder holds both labelled graphs (empty files read back as a graph), so only the choice of folder can make
+    the graphs count as missing.
+    """
+    morpho_dir = tmp_path / "morpho"
+    for path in _graph_folders(morpho_dir, "sub-01", folders).values():
+        (path / LABELLING_SESSION).mkdir()
+        for side in ("L", "R"):
+            (path / LABELLING_SESSION / f"{side}sub-01_{LABELLING_SESSION}.arg").touch()
+    read = rv.aims.read
+    monkeypatch.setattr(
+        rv.aims, "read", lambda path, *a, **k: _graph() if path.endswith(".arg") else read(path, *a, **k)
+    )
+    _write_source(tmp_path, "F", "sub-01_ses-1")
+    remover = _remover(tmp_path, side="F", morpho_dir=morpho_dir)
+
+    with caplog.at_level("ERROR"):
+        remover.remove_ventricle_from_one_subject("sub-01_ses-1")
+
+    assert os.listdir(tmp_path / "out" / "F") == []
+    errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert len(errors) == 1 and errors[0].startswith("sub-01_ses-1: FileNotFoundError")
 
 
 # --- REQ-CTILESTEST-145: missing inputs are logged, not raised -----------------------------------

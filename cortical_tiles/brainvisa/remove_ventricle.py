@@ -44,7 +44,7 @@ import argparse
 import glob
 import re
 import sys
-from os.path import abspath, basename, join, exists, isdir
+from os.path import abspath, basename, join, exists, isdir, relpath
 import numpy as np
 from p_tqdm import p_map
 from soma import aims
@@ -55,6 +55,7 @@ from cortical_tiles.brainvisa.utils.subjects import get_number_subjects
 from cortical_tiles.brainvisa.utils.subjects import select_subjects_int
 from cortical_tiles.brainvisa.utils.logs import setup_log
 from cortical_tiles.brainvisa.utils.parallel import define_njobs
+from cortical_tiles.brainvisa.utils.skip_list import session_key
 from cortical_tiles.brainvisa.utils.quality_checks import \
     compare_number_aims_files_with_expected, \
     get_not_processed_files_general
@@ -73,6 +74,7 @@ _OUTPUT_DIR_DEFAULT = join(_SKELETON_DIR_DEFAULT, "without_ventricle")
 _SRC_FILENAME_DEFAULT = "skeleton_generated_"
 _OUTPUT_FILENAME_DEFAULT = "skeleton_generated_without_ventricle_"
 _LABELLING_SESSION_DEFAULT = "deepcnn_session_auto"
+_GRAPH_WILDCARD = "*"  # the only wildcard read in path_to_graph
 
 # Defines logger
 log = set_file_logger(__file__)
@@ -320,15 +322,14 @@ class RemoveVentricleFromVolume:
 
         output_file = join(self.output_dir, self.output_file % sbj)
 
-        labelled_graph_list = self.get_labelled_graph(subject)
-
         log.debug(f"src_file = {src_file}")
-        log.debug(f"labelled_graphs = {labelled_graph_list}")
         log.debug(f"output_file = {output_file}")
 
         side_list = _get_side_list(self.side)
 
         try:
+            labelled_graph_list = self.get_labelled_graph(subject)
+            log.debug(f"labelled_graphs = {labelled_graph_list}")
             if exists(src_file):
                 volume = aims.read(src_file)
                 for side, graph_file in zip(side_list, labelled_graph_list):
@@ -361,6 +362,26 @@ class RemoveVentricleFromVolume:
         return get_transform_filename(
             side_transform_dir, side, subject_id, graph_file, self.bids)
 
+    def _find_bids_graph_dir(self, subject, subject_id):
+        """Returns the one folder below <morpho_dir>/<subject_id> that
+        path_to_graph matches ('*' the only wildcard) whose session_key,
+        read on the path relative to the subject folder, is subject.
+        Raises FileNotFoundError on none or several."""
+        subject_dir = join(self.morpho_dir, subject_id)
+        pattern = _GRAPH_WILDCARD.join(
+            glob.escape(part)
+            for part in self.path_to_graph.split(_GRAPH_WILDCARD))
+        folders = sorted(
+            folder
+            for folder in glob.glob(join(glob.escape(subject_dir), pattern))
+            if isdir(folder) and session_key(
+                subject_id, relpath(folder, subject_dir), True) == subject)
+        if len(folders) != 1:
+            raise FileNotFoundError(
+                f"{len(folders)} folders below {subject_dir} match "
+                f"{self.path_to_graph} for {subject}")
+        return folders[0]
+
     def get_labelled_graph(self, subject: str):
         """ Find the labelled graph in the morphologist database from the
         source filename.
@@ -368,20 +389,17 @@ class RemoveVentricleFromVolume:
         labelled_graph_list = []
         side_list = _get_side_list(self.side)
         subject = _get_subject_id(subject)
+        if self.bids:
+            subject_id, separator, _ = subject.partition("_")
+            if not separator:
+                log.warning(f"The subject {subject} has no session, "
+                            "acquisition or run.")
+            graph_dir = self._find_bids_graph_dir(subject, subject_id)
         for side in side_list:
             if self.bids:
-                split = subject.split("_")
-                subject_id = split[0]
-                if len(split) > 1:
-                    keys = "_".join(split[1:])
-                else:
-                    keys = ""
-                    log.warning(f"The subject {subject} has no session, "
-                                "acquisition or run.")
                 filename = f"{side}{subject_id}_{self.labelling_session}.arg"
                 labelled_graph_file = join(
-                    self.morpho_dir, subject_id, self.path_to_graph.replace(
-                        "*", keys), self.labelling_session, filename)
+                    graph_dir, self.labelling_session, filename)
             else:
                 filename = f"{side}{subject}_{self.labelling_session}.arg"
                 labelled_graph_file = join(
