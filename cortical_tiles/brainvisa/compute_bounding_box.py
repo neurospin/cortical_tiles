@@ -56,7 +56,8 @@ from cortical_tiles.brainvisa.utils.logs import setup_log
 from cortical_tiles.brainvisa.utils.referentials import \
     ICBM2009c_to_aims_talairach
 from cortical_tiles.brainvisa.utils.subjects import get_number_subjects
-from cortical_tiles.brainvisa.utils.subjects import select_subjects
+from cortical_tiles.brainvisa.utils.subjects import \
+    select_subjects_int_if_list_of_dict
 from cortical_tiles.brainvisa.utils.subjects import \
     get_all_subjects_as_dictionary
 from cortical_tiles.brainvisa.utils.sulcus import complete_sulci_name
@@ -174,7 +175,7 @@ def get_bounding_boxes(subjects, sulcus):
         log.info(sub)
         graph_file = sub['graph_file'] % sub
         # It looks for a graph file .arg
-        list_graph_file = glob.glob(join(sub['dir'], graph_file))
+        list_graph_file = sorted(glob.glob(join(sub['dir'], graph_file)))
         if len(list_graph_file) == 0:
             raise RuntimeError(f"No graph file! "
                                f"{sub['dir']} doesn't contain {graph_file}")
@@ -299,7 +300,8 @@ class BoundingBoxMax:
             self.json.write_general_info()
 
             # Gives the possibility to list only the first number_subjects
-            subjects = select_subjects(subjects, number_subjects)
+            subjects = select_subjects_int_if_list_of_dict(
+                subjects, subjects, get_number_subjects(number_subjects))
 
             # Creates target bbox dir if it doesn't exist
             create_folder(self.bbox_dir)

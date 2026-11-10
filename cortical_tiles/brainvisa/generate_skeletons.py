@@ -210,7 +210,7 @@ class GraphConvert2Skeleton:
         """
         graph_path = f"{self.src_dir}/{subject}/" +\
                      f"{self.path_to_graph}/{self.side}*.arg"
-        list_graph_file = glob.glob(graph_path)
+        list_graph_file = sorted(glob.glob(graph_path))
         log.debug(f"list_graph_file = {list_graph_file}")
         if len(list_graph_file) == 0:
             exc = FileNotFoundError(f"No graph file for subject {subject} "

@@ -213,7 +213,7 @@ class GraphGenerateTransform:
                      f"{self.path_to_graph}/{self.side}*.arg"
         log.debug(graph_path)
         list_graph_file = [
-            graph_file for graph_file in glob.glob(graph_path)
+            graph_file for graph_file in sorted(glob.glob(graph_path))
             if covered_by(self._subject_folder(graph_file), {subject})]
         log.debug(f"list_graph_file = {list_graph_file}")
         if not list_graph_file:

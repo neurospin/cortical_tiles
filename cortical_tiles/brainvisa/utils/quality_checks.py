@@ -99,13 +99,53 @@ def compare_number_aims_files_with_number_in_source(output_dir: str,
     return generated_files, src_files
 
 
+def _refuse_ambiguous_sources(src_files, subject_tail):
+    """Raise ValueError when two source files give one subject key or differ
+    in the text before it.
+
+    Args:
+        src_files: source file paths, in sorted() order
+        subject_tail: function giving the end of a path that starts with its
+            subject key, as the calling function derives the key (the key is
+            that text up to its first ".")
+
+    Raises:
+        ValueError: naming the first two files, in sorted() order, that break
+            the rule
+
+    Complexity: O(n)
+    """
+    if not src_files:
+        return
+    first_file = src_files[0]
+    first_prefix = first_file[:len(first_file) - len(subject_tail(first_file))]
+    file_by_key = {}
+    for path in src_files:
+        tail = subject_tail(path)
+        prefix = path[:len(path) - len(tail)]
+        key = tail.split(".")[0]
+        if prefix != first_prefix:
+            raise ValueError(
+                f"Ambiguous source folder: {first_file} and {path} differ in "
+                f"the file-name text before the subject key "
+                f"({first_prefix!r} and {prefix!r})")
+        if key in file_by_key:
+            raise ValueError(
+                f"Ambiguous source folder: {file_by_key[key]} and {path} "
+                f"give one subject key {key!r}")
+        file_by_key[key] = path
+
+
 def get_not_processed_files(src_dir, tgt_dir, src_filename):
     """Returns list of source files not yet processed.
 
     This is done by comparing subjects in src and tgt directories"""
 
     if isinstance(src_dir, str):
-        src_files = glob.glob(f"{src_dir}/*.nii.gz")
+        src_files = sorted(glob.glob(f"{src_dir}/*.nii.gz"))
+        _refuse_ambiguous_sources(
+            src_files,
+            lambda path: os.path.basename(path).split(src_filename)[-1])
     log.info(f"number of source files = {len(src_files)}")
     if len(src_files):
         log.info(f"first source file = {src_files[0]}")
@@ -154,7 +194,9 @@ def get_not_processed_files_general(src_dir, tgt_dir,
     This is done by comparing subjects in src and tgt directories"""
 
     if isinstance(src_dir, str):
-        src_files = glob.glob(f"{src_dir}/*.nii.gz")
+        src_files = sorted(glob.glob(f"{src_dir}/*.nii.gz"))
+        _refuse_ambiguous_sources(
+            src_files, lambda path: path.split(src_filename)[-1])
     log.info(f"number of source files = {len(src_files)}")
     if len(src_files):
         log.info(f"first source file = {src_files[0]}")
@@ -236,7 +278,11 @@ def get_not_processed_cropped_files(src_dir, tgt_dir):
     This is done by comparing subjects in src and tgt directories"""
 
     if isinstance(src_dir, str):
-        src_files = glob.glob(f"{src_dir}/*.nii.gz")
+        src_files = sorted(glob.glob(f"{src_dir}/*.nii.gz"))
+        _refuse_ambiguous_sources(
+            src_files,
+            lambda path: "_".join(
+                path.split("resampled_")[-1].split("_")[1:]))
     log.info(f"number of source files = {len(src_files)}")
     if len(src_files):
         log.info(f"first source file = {src_files[0]}")

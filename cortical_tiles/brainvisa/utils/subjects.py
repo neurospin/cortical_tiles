@@ -156,7 +156,7 @@ def get_all_subjects_as_dictionary(src_dir_list,
     # Main loop: list all subjects of the directories
     # listed in self.src_dir
     for src_dir, graph_file in zip(src_dir_list, graph_file_list):
-        list_src_dir = os.listdir(src_dir)
+        list_src_dir = sorted(os.listdir(src_dir))
         if len(list_src_dir) == 0:
             raise RuntimeError(f"source directory {src_dir} is empty!")
         for filename in list_src_dir:
