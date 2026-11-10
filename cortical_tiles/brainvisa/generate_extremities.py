@@ -218,11 +218,11 @@ class GraphConvert2Extremity:
             f"{self.path_to_skeleton_with_hull}/{self.side}skeleton*.nii.gz"
 
         # Gets graph file path
-        list_graph_file = glob.glob(graph_path)
+        list_graph_file = sorted(glob.glob(graph_path))
         log.debug(f"list_graph_file = {list_graph_file}")
 
         # Gets skeleton with hull file path
-        list_skeleton_with_hull_file = glob.glob(skeleton_with_hull_path)
+        list_skeleton_with_hull_file = sorted(glob.glob(skeleton_with_hull_path))
         log.debug(
             f"list_skeleton_with_hull_file = {list_skeleton_with_hull_file}")
 
@@ -265,7 +265,7 @@ class GraphConvert2Extremity:
         """Loops over subjects and converts graphs into skeletons.
         """
         # Gets list of subjects
-        filenames = glob.glob(f"{self.src_dir}/*")
+        filenames = sorted(glob.glob(f"{self.src_dir}/*"))
         list_subjects = [basename(filename) for filename in filenames
                          if is_it_a_subject(filename)]
         log.info(f"Number of subjects before qc = {len(list_subjects)}")

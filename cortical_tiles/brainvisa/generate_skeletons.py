@@ -243,7 +243,7 @@ class GraphConvert2Skeleton:
         skipped_before = load_skipped(self.skip_dir, self.side)
         self.skipped_keys = frozenset(skipped_before)
         # Gets list of subjects
-        filenames = glob.glob(f"{self.src_dir}/*")
+        filenames = sorted(glob.glob(f"{self.src_dir}/*"))
         list_subjects = [basename(filename) for filename in filenames
                          if is_it_a_subject(filename)]
         log.info(f"Number of subjects before qc = {len(list_subjects)}")

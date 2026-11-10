@@ -203,7 +203,7 @@ class DatasetHullRemoved:
             if number_subjects:
                 # subjects are detected as the directory names under src_dir
                 list_all_subjects = [
-                    dI[:6] for dI in os.listdir(self.src_dir)
+                    dI[:6] for dI in sorted(os.listdir(self.src_dir))
                     if ((os.path.isdir(self.src_dir)) and ('minf' not in dI))
                     ]
 

@@ -137,7 +137,7 @@ def loop_over_directory(src_dir, tgt_dir):
     """Loops conversion over input directory
     """
     # Gets and creates all filenames
-    filenames = glob.glob(f"{src_dir}/*.nii.gz")
+    filenames = sorted(glob.glob(f"{src_dir}/*.nii.gz"))
     subjects = [get_subject_name(filename) for filename in filenames]
     log.info(f"subjects[:5] = {subjects[:5]}")
     log.debug(subjects)

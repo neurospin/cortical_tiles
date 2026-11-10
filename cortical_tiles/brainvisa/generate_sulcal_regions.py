@@ -320,7 +320,7 @@ def valid_subjects(config, side):
     In BIDS mode a subject also needs one graph key outside the skip list.
     """
     names = [basename(path)
-             for path in glob.glob(f"{config['graphs_dir']}/*")
+             for path in sorted(glob.glob(f"{config['graphs_dir']}/*"))
              if is_it_a_subject(path)]
     kept = select_good_qc(names, config.get("skel_qc_path", ""))
     skipped = load_skipped(config["output_dir"], side)

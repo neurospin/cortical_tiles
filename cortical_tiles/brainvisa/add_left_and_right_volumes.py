@@ -207,8 +207,8 @@ class AddLeftandRightVolumes:
         log.debug(f"reg exp = {self.expr}")
 
         if isdir(self.src_dir):
-            filenames = glob.glob(join(f"{self.src_dir}", "L", "*.nii.gz")) + \
-                glob.glob(join(f"{self.src_dir}", "R", "*.nii.gz"))
+            filenames = sorted(glob.glob(join(f"{self.src_dir}", "L", "*.nii.gz"))) + \
+                sorted(glob.glob(join(f"{self.src_dir}", "R", "*.nii.gz")))
             
             log.debug(f"filenames = {filenames[:5]}")
 

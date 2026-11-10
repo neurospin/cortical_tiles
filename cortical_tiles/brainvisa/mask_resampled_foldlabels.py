@@ -223,7 +223,7 @@ class FoldLabelMasker:
 
             if os.path.isdir(self.src_dir):
                 skipped = load_skipped(self.skip_dir, self.side)
-                src_files = glob.glob(f"{self.src_dir}/*.nii.gz")
+                src_files = sorted(glob.glob(f"{self.src_dir}/*.nii.gz"))
                 log.debug(f"list src files = {src_files}")
                 if src_files:
                     log.debug(os.path.basename(src_files[0]))
