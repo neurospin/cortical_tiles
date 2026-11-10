@@ -113,7 +113,9 @@ def test_transform_negative_ventricle_index_raises_out_of_bounds_error():
 _BIDS_PATH_TO_GRAPH = "t1mri/*/default_analysis/folds/3.1"
 
 
-def _remover(tmp_path, side="L", bids=True, path_to_graph=_BIDS_PATH_TO_GRAPH, morpho_dir="/morpho"):
+def _remover(
+    tmp_path, side="L", bids=True, path_to_graph=_BIDS_PATH_TO_GRAPH, morpho_dir="/morpho", transform_dir=None
+):
     return rv.RemoveVentricleFromVolume(
         src_dir=str(tmp_path / "src"),
         output_dir=str(tmp_path / "out"),
@@ -125,6 +127,7 @@ def _remover(tmp_path, side="L", bids=True, path_to_graph=_BIDS_PATH_TO_GRAPH, m
         side=side,
         bids=bids,
         parallel=False,
+        transform_dir=transform_dir,
     )
 
 
@@ -189,6 +192,43 @@ def test_bids_subject_without_single_key_folder_logs_error(tmp_path, caplog, mon
     assert os.listdir(tmp_path / "out" / "F") == []
     errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
     assert len(errors) == 1 and errors[0].startswith("sub-01_ses-1: FileNotFoundError")
+
+
+# --- REQ-INPUTKIND-BDRABCZUK-41EDB49F2DFE: transform file named after the session key once --------
+
+
+def _graph_file(sub_id, folder, side):
+    """The labelled graph path of one side below <morpho>/<sub_id>/t1mri/<folder>, as get_labelled_graph builds it."""
+    folds = _BIDS_PATH_TO_GRAPH.replace("*", folder)
+    return f"/morpho/{sub_id}/{folds}/{LABELLING_SESSION}/{side}{sub_id}_{LABELLING_SESSION}.arg"
+
+
+@pytest.mark.parametrize("side", ["L", "R"])
+@pytest.mark.parametrize(
+    "subject, sub_id, folder",
+    [
+        ("sub-002_ses-V1", "sub-002", "ses-V1"),  # the rosette run of DEF-INPUTKIND-BDRABCZUK-6EEBFEA85344
+        ("sub-01_ses-1_run-2", "sub-01", "ses-1_run-2"),
+        ("_sub-01_ses-1", "sub-01", "ses-1"),  # leading '_' stripped first
+        ("sub-04_ses-2_run-1", "sub-04", "run-1_ses-2"),  # non-canonical order
+    ],
+)
+def test_bids_transform_file_is_named_after_the_session_key_once(tmp_path, side, subject, sub_id, folder):
+    """REQ-INPUTKIND-BDRABCZUK-41EDB49F2DFE: <side>transform_to_ICBM2009c_<session key>.trm, no part appended again."""
+    remover = _remover(tmp_path, side="F", transform_dir=str(tmp_path / "transforms"))
+    key = subject.lstrip("_")
+    expected = f"{tmp_path / 'transforms' / side}/{side}transform_to_ICBM2009c_{key}.trm"
+    assert remover.get_transform_file(subject, side, _graph_file(sub_id, folder, side)) == expected
+
+
+@pytest.mark.parametrize("subject", ["sub-01", "_sub-01"])
+def test_non_bids_transform_file_is_named_after_the_subject(tmp_path, subject):
+    """Outside BIDS mode the transform file keeps the subject name (leading '_' stripped)."""
+    path_to_graph = "t1mri/default_acquisition/default_analysis/folds/3.1"
+    transform_dir = str(tmp_path / "transforms")
+    remover = _remover(tmp_path, side="F", bids=False, path_to_graph=path_to_graph, transform_dir=transform_dir)
+    expected = f"{tmp_path / 'transforms' / 'L'}/Ltransform_to_ICBM2009c_sub-01.trm"
+    assert remover.get_transform_file(subject, "L", _graph_file("sub-01", "default_acquisition", "L")) == expected
 
 
 # --- REQ-CTILESTEST-145: missing inputs are logged, not raised -----------------------------------
