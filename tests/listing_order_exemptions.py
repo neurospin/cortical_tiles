@@ -1,3 +1,4 @@
+# ruff: noqa: E501 - keys are exact call texts printed by the rule test
 """Exemptions from the listing-order rule of cortical_tiles (TASK-READORDER-BDRABCZUK-4550903D1CB2).
 
 tests/test_listing_order_rule.py fails on a glob, iglob, rglob, listdir, scandir, walk or iterdir
