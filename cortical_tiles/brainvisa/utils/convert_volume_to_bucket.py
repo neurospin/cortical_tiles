@@ -132,7 +132,7 @@ def loop_over_directory(src_dir, tgt_dir, mask_dir, mesh, distmap):
     """Loops conversion over input directory
     """
     # Gets and creates all filenames
-    filenames = glob.glob(f"{src_dir}/*.nii.gz")
+    filenames = sorted(glob.glob(f"{src_dir}/*.nii.gz"))
     subjects = [get_basename_without_extension(filename)
                 for filename in filenames]
     bucket_filenames = [

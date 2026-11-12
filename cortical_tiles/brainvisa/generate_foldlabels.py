@@ -247,7 +247,7 @@ class GraphConvert2FoldLabel:
         """Loops over subjects and converts graphs into skeletons.
         """
         # Gets list of subject names
-        filenames = glob.glob(f"{self.src_dir}/*")
+        filenames = sorted(glob.glob(f"{self.src_dir}/*"))
         list_subjects = [basename(filename) for filename in filenames
                          if is_it_a_subject(filename)]
         log.info(f"Number of subjects before qc = {len(list_subjects)}")

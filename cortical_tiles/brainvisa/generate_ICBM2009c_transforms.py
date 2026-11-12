@@ -253,7 +253,7 @@ class GraphGenerateTransform:
         """Loops over subjects to generate transforms to ICBM2009c from graphs.
         """
         # Gets list fo subjects
-        filenames = glob.glob(f"{self.src_dir}/*")
+        filenames = sorted(glob.glob(f"{self.src_dir}/*"))
         list_subjects = [basename(filename) for filename in filenames
                          if is_it_a_subject(filename)]
         log.info(f"Number of subjects before qc = {len(list_subjects)}")

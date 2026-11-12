@@ -423,7 +423,7 @@ class RemoveVentricleFromVolume:
         log.debug(f"reg exp = {self.expr}")
 
         if isdir(self.src_dir):
-            src_files = glob.glob(f"{self.src_dir}/*.nii.gz")
+            src_files = sorted(glob.glob(f"{self.src_dir}/*.nii.gz"))
             log.debug(f"Volume files list = {src_files}")
 
             # Generates list of subjects not treated yet

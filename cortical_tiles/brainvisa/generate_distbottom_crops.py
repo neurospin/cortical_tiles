@@ -204,7 +204,7 @@ class DistBottomCropGenerator:
         if nb_subjects:
 
             if os.path.isdir(self.src_dir):
-                files = glob.glob(f"{self.src_dir}/*.nii.gz")
+                files = sorted(glob.glob(f"{self.src_dir}/*.nii.gz"))
                 log.debug(f"Nifti files in {self.src_dir} = {files}")
                 log.debug(f"Regular expresson is: {self.expr}")
 

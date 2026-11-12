@@ -72,7 +72,7 @@ def generate_np_array(src_dir):
     if os.path.isdir(src_dir):
         list_all_subjects = \
             [re.search(expr, os.path.basename(dI))[1]
-             for dI in glob.glob(f"{src_dir}/*.nii.gz")]
+             for dI in sorted(glob.glob(f"{src_dir}/*.nii.gz"))]
 
     else:
         raise NotADirectoryError(

@@ -62,7 +62,7 @@ def save_to_pickle(
     log.info("Now generating pickle file...")
     log.debug(f"cropped_dir = {cropped_dir}")
 
-    for filename in tqdm(os.listdir(cropped_dir)):
+    for filename in tqdm(sorted(os.listdir(cropped_dir))):
         file_nii = os.path.join(cropped_dir, filename)
         if is_file_nii(file_nii):
             aimsvol = aims.read(file_nii)
@@ -254,7 +254,7 @@ def save_to_numpy(
              "--------------------------------\n")
     log.debug(f"cropped_dir = {cropped_dir}")
     log.info("STEP 1. Now reading cropped dir...")
-    listdir = os.listdir(cropped_dir)
+    listdir = sorted(os.listdir(cropped_dir))
     listdir = [filename for filename in listdir
                if is_file_nii(os.path.join(cropped_dir, filename))]
     if parallel:
