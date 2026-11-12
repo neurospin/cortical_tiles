@@ -46,7 +46,6 @@ from p_tqdm import p_map
 from soma import aims
 
 from cortical_tiles.brainvisa.utils.skeleton import is_skeleton
-from cortical_tiles.brainvisa.utils.subjects import is_it_a_subject
 from cortical_tiles.brainvisa import exception_handler
 from cortical_tiles.brainvisa.utils.folder import create_folder
 from cortical_tiles.brainvisa.utils.subjects import get_number_subjects
@@ -212,9 +211,8 @@ class AddLeftandRightVolumes:
             
             log.debug(f"filenames = {filenames[:5]}")
 
-            list_subjects = list(set(re.search(self.expr, basename(filename))[1]
-                             for filename in filenames  
-                             if is_it_a_subject(filename)))
+            list_subjects = sorted(set(re.search(self.expr, basename(filename))[1]
+                             for filename in filenames))
             list_subjects = select_subjects(list_subjects, number_subjects)
 
             log.info(f"Expected number of subjects = {len(list_subjects)}")
