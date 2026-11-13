@@ -1,6 +1,6 @@
 """Subject set of the stacked crop arrays of one side.
 
-``quality_checks`` and ``quality_checks_extremities`` check that the stacked
+``quality_checks`` checks that the skeleton and foldlabel stacked
 arrays of a side agree with each other and with their subject CSVs;
 ``record_one_sided_subjects`` skip-lists the subjects having a resampled file
 of one input type only, ``restrict_stack`` drops excluded subjects from a
@@ -36,7 +36,6 @@ from cortical_tiles.brainvisa.utils.subjects import select_good_qc
 _RUN_STACKS = (
     ("skeleton", "crops", "skeleton"),
     ("label", "labels", "foldlabel"),
-    ("extremities", "extremities", "extremities"),
     ("distmap", "distmaps", "distmap"),
 )
 _SAMPLE_DIRS = {kind: sample_dir for _, sample_dir, kind in _RUN_STACKS}
@@ -91,28 +90,6 @@ def quality_checks(crop_dir, side):
         "Number of skeleton subjects differs between numpy array and csv"
     assert (f.shape[0] == len(dff)), \
         "Number of foldlabel subjects differs between numpy array and csv"
-
-
-def quality_checks_extremities(crop_dir, side):
-    s = np.load(f"{crop_dir}/{side}skeleton.npy")
-    f = np.load(f"{crop_dir}/{side}extremities.npy")
-
-    # checks if same voxel position
-    assert (s.shape == f.shape), (
-        "Skeleton and extremities of different shapes: "
-        f"{s.shape} != {f.shape}")
-
-    # Checks if subjects are equal between foldlabel and skeleton
-    dff = pd.read_csv(f"{crop_dir}/{side}extremities_subject.csv")
-    dfs = pd.read_csv(f"{crop_dir}/{side}skeleton_subject.csv")
-    assert (dff.equals(dfs)), \
-        "List of subjects for extremities and skeleton are not equal"
-
-    # Checks if numpy arrays and csvs are consistent
-    assert (s.shape[0] == len(dfs)), \
-        "Number of skeleton subjects differs between numpy array and csv"
-    assert (f.shape[0] == len(dff)), \
-        "Number of extremities subjects differs between numpy array and csv"
 
 
 def restrict_stack(crop_dir, file_basename, excluded, write_sub_id=False):

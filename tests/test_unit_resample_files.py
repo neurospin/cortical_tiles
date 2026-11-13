@@ -107,7 +107,7 @@ def _build(resamplers, input_type, src_filename="src_", output_filename="out_"):
 
 @pytest.mark.parametrize("input_type", ["skeletons", "label", ""])
 def test_resample_files_rejects_unknown_input_type(tmp_path, input_type):
-    """REQ-CTILESTEST-41: an input_type outside the four supported ones raises ValueError."""
+    """REQ-CTILESTEST-41: an input_type outside the three supported ones raises ValueError."""
     with pytest.raises(ValueError):
         rf.resample_files(
             src_dir=str(tmp_path), input_type=input_type, resampled_dir=str(tmp_path), skip_dir=str(tmp_path / "skip")
@@ -119,7 +119,7 @@ def test_resample_files_rejects_unknown_input_type(tmp_path, input_type):
 
 @pytest.mark.parametrize(
     "input_type, out_subdir",
-    [("skeleton", "R"), ("foldlabel", "R_before_masking"), ("extremities", "R_before_masking"), ("distmap", "R")],
+    [("skeleton", "R"), ("foldlabel", "R_before_masking"), ("distmap", "R")],
 )
 def test_resampler_file_naming(resamplers, input_type, out_subdir):
     """REQ-CTILESTEST-42: source, transform and output file names for subject 'sub' and side R."""
@@ -149,15 +149,6 @@ def test_resample_files_none_filenames_fall_back_per_input_type(resamplers, inpu
 
     assert os.path.basename(resampler.src_file % subject) == f"R{src_name}sub.nii.gz"
     assert os.path.basename(resampler.resampled_file % subject) == f"R{out_name}sub.nii.gz"
-
-
-def test_resample_files_extremities_none_filenames_fall_back_to_extremities_names(resamplers):
-    """REQ-CTDEFECTS-05 (inverts the extremities case of REQ-CTILESTEST-43): output <side>resampled_extremities_<subject>."""
-    resampler = _build(resamplers, "extremities", src_filename=None, output_filename=None)
-    subject = {"subject": "sub", "side": SIDE}
-
-    assert os.path.basename(resampler.src_file % subject) == "Rextremities_sub.nii.gz"
-    assert os.path.basename(resampler.resampled_file % subject) == "Rresampled_extremities_sub.nii.gz"
 
 
 # --- REQ-CTILESTEST-44: foldlabel resampling output -------------------------------------------------

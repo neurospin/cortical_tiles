@@ -130,7 +130,6 @@ def test_crop_mask_no_mask_keeps_all_voxels(masked_case):
 GENERATORS = [
     (gc.SkeletonCropGenerator, "skeleton", "crops", "skeleton"),
     (gc.FoldLabelCropGenerator, "foldlabel", "labels", "label"),
-    (gc.ExtremitiesCropGenerator, "extremities", "extremities", "extremities"),
     (gc.DistMapCropGenerator, "distmap", "distmaps", "distmap"),
 ]
 
@@ -149,7 +148,7 @@ def test_crop_generator_file_naming(tmp_path, cls, kind, subdir, _npy):
 
 @pytest.mark.parametrize("cls, _kind, _subdir, npy", GENERATORS)
 def test_crop_generator_stacked_array_name(tmp_path, cls, _kind, _subdir, npy):
-    """REQ-CTILESTEST-55: stacked array basename is <side>skeleton/label/extremities/distmap."""
+    """REQ-NODISTB-BDRABCZUK-7CD0033309FB: stacked array basename is <side>skeleton/label/distmap."""
     gen = cls(src_dir="/src", crop_dir=str(tmp_path), side=SIDE, list_sulci="S.C.")
     assert gen.file_basename_npy == f"R{npy}"
 
@@ -244,7 +243,7 @@ def test_generate_crops_default_does_not_apply_mask(crop_inputs):
     assert np.count_nonzero(crop[mask[box] == 0]) > 0
 
 
-# --- REQ-CTILESTEST-64 / 65: quality checks ---------------------------------------------------------
+# --- REQ-CTILESTEST-64: quality checks ---------------------------------------------------------
 
 
 def _write_qc_case(crop_dir, kind, skeleton, other, skeleton_subjects, other_subjects):
@@ -291,40 +290,14 @@ def test_foldlabel_quality_checks_reject_inconsistent_arrays(tmp_path, defect):
         gc.quality_checks(str(tmp_path), SIDE)
 
 
-def test_extremities_quality_checks_accept_consistent_arrays(tmp_path):
-    """REQ-CTILESTEST-65: same shape and equal CSVs of matching length -> no error (supports may differ)."""
-    skeleton, _ = _qc_arrays()
-    extremities = np.zeros_like(skeleton)
-    extremities[0, 0, 0, 0, 0] = 1
-    _write_qc_case(str(tmp_path), "extremities", skeleton, extremities, ["a", "b"], ["a", "b"])
-    gc.quality_checks_extremities(str(tmp_path), SIDE)
-
-
-@pytest.mark.parametrize("defect", ["shape", "csv", "count"])
-def test_extremities_quality_checks_reject_inconsistent_arrays(tmp_path, defect):
-    """REQ-CTILESTEST-65: shape, CSV or count mismatch -> AssertionError."""
-    skeleton, _ = _qc_arrays()
-    extremities = np.zeros_like(skeleton)
-    skeleton_subjects, extremities_subjects = ["a", "b"], ["a", "b"]
-    if defect == "shape":
-        extremities = extremities[:, :2]
-    elif defect == "csv":
-        extremities_subjects = ["a", "c"]
-    elif defect == "count":
-        skeleton_subjects = extremities_subjects = ["a", "b", "c"]
-    _write_qc_case(str(tmp_path), "extremities", skeleton, extremities, skeleton_subjects, extremities_subjects)
-    with pytest.raises(AssertionError):
-        gc.quality_checks_extremities(str(tmp_path), SIDE)
-
-
 # --- TASK-CTFAIL-BDRABCZUK-8B4393E2F8A2: crop subject set of a side -------------------------------
 # Layout mirrors run_with_params: <out>/<kind dir>/2mm/<side>/<side>resampled_<kind>_<s>.nii.gz; the one
 # shared per-side skip list lies in the skip_dir passed to generate_crops (<out> unless a test says otherwise).
 # Each test crops into one crop_dir, skeleton pass first, as generate_sulcal_regions does for one region and side.
 
 SEEDS = {"a1": 0, "b2": 1, "c3": 2, "d4": 3}
-KIND_DIRS = {"skeleton": "skeletons", "foldlabel": "foldlabels", "extremities": "extremities", "distmap": "distmaps"}
-NPY_BASENAMES = {"skeleton": "skeleton", "foldlabel": "label", "extremities": "extremities", "distmap": "distmap"}
+KIND_DIRS = {"skeleton": "skeletons", "foldlabel": "foldlabels", "distmap": "distmaps"}
+NPY_BASENAMES = {"skeleton": "skeleton", "foldlabel": "label", "distmap": "distmap"}
 
 
 def _subject_set_layout(tmp_path, **subjects_by_kind):
@@ -439,14 +412,12 @@ def test_crop_subject_set_does_not_record_skip_listed_subject_again(tmp_path):
     assert skip_list.load_skip_entries(skip_dir=str(out), side=SIDE) == before
 
 
-@pytest.mark.parametrize("input_type", ["skeleton", "extremities", "distmap"])
+@pytest.mark.parametrize("input_type", ["skeleton", "distmap"])
 def test_crop_subject_set_leaves_skip_listed_subject_out(tmp_path, input_type):
-    """REQ-CTFAIL-BDRABCZUK-637B5474B61E: skeleton, extremities and distmap crops leave skip-listed subjects out."""
+    """REQ-CTFAIL-BDRABCZUK-F304FD1788CA: skeleton and distmap crops leave skip-listed subjects out."""
     out = _subject_set_layout(tmp_path, **{kind: ("a1", "b2") for kind in {"skeleton", input_type}})
     _skip(out, "a1")
 
-    if input_type == "extremities":
-        _crop(tmp_path, out, "skeleton")  # quality_checks_extremities compares with <side>skeleton
     _crop(tmp_path, out, input_type)
 
     assert _stacked_subjects(tmp_path, input_type) == ["b2"]
@@ -712,22 +683,6 @@ def test_foldlabel_crop_failure_leaves_subject_out_of_the_skeleton_stack(tmp_pat
     assert _stacked_subjects(tmp_path, "foldlabel") == ["a1", "c3"]
 
 
-def test_extremities_crop_failure_leaves_subject_out_of_the_skeleton_and_foldlabel_stacks(tmp_path):
-    """REQ-CTFAIL-BDRABCZUK-68E295289926: run order of generate_sulcal_regions; both earlier passes stacked the subject
-    before its extremities crop failed; the three stacks agree and quality_checks_extremities passes."""
-    subjects = ("a1", BAD, "c3")
-    out = _subject_set_layout(tmp_path, skeleton=subjects, foldlabel=subjects, extremities=subjects)
-    _crop(tmp_path, out, "skeleton")
-    _crop(tmp_path, out, "foldlabel")
-    _break_source(out, "extremities", BAD)
-
-    _crop(tmp_path, out, "extremities")
-
-    assert _stacked_subjects(tmp_path, "skeleton") == ["a1", "c3"]
-    assert _stacked_subjects(tmp_path, "foldlabel") == ["a1", "c3"]
-    assert _stacked_subjects(tmp_path, "extremities") == ["a1", "c3"]
-
-
 def test_failure_returned_by_a_p_map_worker_is_not_ignored(tmp_path, monkeypatch):
     """REQ-CTFAIL-BDRABCZUK-828B578D1652: a failure known only from the p_map result, a (subject, reason) pair of
     protocol P with no skip-list entry behind it, still takes the subject out of the skeleton stack."""
@@ -873,10 +828,10 @@ def test_empty_crop_leaves_subject_out_of_the_skeleton_stack(tmp_path, parallel)
     assert _stacked_subjects(tmp_path, "skeleton") == KEPT
 
 
-@pytest.mark.parametrize("input_type", ["foldlabel", "extremities", "distmap"])
+@pytest.mark.parametrize("input_type", ["foldlabel", "distmap"])
 def test_empty_crop_leaves_subject_out_of_the_later_stacks(tmp_path, input_type):
-    """REQ-CTFAIL-BDRABCZUK-726AA9433848: the later passes of the region follow the skeleton pass, so the stacks stay
-    aligned; the extremities and distmap volumes of the subject are not empty."""
+    """REQ-CTFAIL-BDRABCZUK-123E00A87662: the later passes of the region follow the skeleton pass, so the stacks stay
+    aligned; the distmap volume of the subject is not empty."""
     out = _empty_crop_layout(tmp_path, input_type)
 
     _crop(tmp_path, out, "skeleton")
@@ -895,19 +850,15 @@ def test_empty_crop_deletes_the_cropped_file(tmp_path):
 
 
 def test_non_zero_skeleton_voxel_keeps_subject_in_the_stacks(tmp_path):
-    """REQ-CTFAIL-BDRABCZUK-1823CE233AA2: regression guard, passes in red: one voxel in the skeleton crop is enough,
-    and an all-zero extremities crop alone drops nobody."""
-    out = _subject_set_layout(tmp_path, skeleton=("a1", EMPTY), extremities=("a1", EMPTY))
+    """REQ-CTFAIL-BDRABCZUK-914072079AD0: regression guard: one voxel in the skeleton crop is enough."""
+    out = _subject_set_layout(tmp_path, skeleton=("a1", EMPTY))
     one_voxel = np.zeros(SHAPE, dtype=np.int16)
     one_voxel[3, 4, 5, 0] = 30
     _write_volume(_source_path(out, "skeleton", EMPTY), one_voxel)
-    _write_volume(_source_path(out, "extremities", EMPTY), np.zeros(SHAPE, dtype=np.int16))
 
     _crop(tmp_path, out, "skeleton")
-    _crop(tmp_path, out, "extremities")
 
     assert _stacked_subjects(tmp_path, "skeleton") == ["a1", EMPTY]
-    assert _stacked_subjects(tmp_path, "extremities") == ["a1", EMPTY]
 
 
 def test_empty_crop_rerun_keeps_one_entry(tmp_path):

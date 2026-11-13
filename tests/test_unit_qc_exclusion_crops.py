@@ -39,9 +39,9 @@ QC_KEPT = "kept"
 REMOVAL_CAUSES = (QC_ZERO, QC_UNMENTIONED)
 CROP_FOLDERS = {"skeleton": "crops", "foldlabel": "labels"}
 SKELETON_FOLDLABEL = ("skeleton", "foldlabel")
-INPUT_TYPES = ("skeleton", "foldlabel", "extremities", "distmap")
+INPUT_TYPES = ("skeleton", "foldlabel", "distmap")
 # The passes that come before an input_type and write stacks its own pass reads
-EARLIER_PASSES = {"foldlabel": ("skeleton",), "extremities": ("skeleton",)}
+EARLIER_PASSES = {"foldlabel": ("skeleton",)}
 
 
 def _qc_file(tmp_path, states):
@@ -149,19 +149,6 @@ def test_foldlabel_pass_leaves_removed_subject_out_of_the_skeleton_stack(tmp_pat
     _crop_with_qc(tmp_path, out, "skeleton")
 
     _crop_with_qc(tmp_path, out, "foldlabel", qc_path=_qc_file(tmp_path, {"a1": QC_KEPT, "b2": QC_ZERO}))
-
-    assert _stacked_subjects(tmp_path, "skeleton") == ["a1"]
-    assert _stacked_subjects(tmp_path, "foldlabel") == ["a1"]
-
-
-def test_extremities_pass_leaves_removed_subject_out_of_the_earlier_stacks(tmp_path):
-    """REQ-CTFAIL-BDRABCZUK-B19A3E1314B6: skeleton and foldlabel stacks written without QC lose the subject in the
-    extremities pass."""
-    out = _subject_set_layout(tmp_path, skeleton=("a1", "b2"), foldlabel=("a1", "b2"), extremities=("a1", "b2"))
-    _crop_with_qc(tmp_path, out, "skeleton")
-    _crop_with_qc(tmp_path, out, "foldlabel")
-
-    _crop_with_qc(tmp_path, out, "extremities", qc_path=_qc_file(tmp_path, {"a1": QC_KEPT, "b2": QC_ZERO}))
 
     assert _stacked_subjects(tmp_path, "skeleton") == ["a1"]
     assert _stacked_subjects(tmp_path, "foldlabel") == ["a1"]

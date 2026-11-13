@@ -64,8 +64,8 @@ from cortical_tiles.brainvisa.utils.save_data import save_to_numpy
 from cortical_tiles.brainvisa.utils.crop_subjects import \
     check_stack_has_subjects, collect_failed_subjects, crop_subject_keys, \
     exclude_empty_rows, qc_removed_subjects, quality_checks, \
-    quality_checks_extremities, record_one_sided_subjects, \
-    record_stale_crop_subjects, restrict_stack, stale_crop_subjects
+    record_one_sided_subjects, record_stale_crop_subjects, restrict_stack, \
+    stale_crop_subjects
 from cortical_tiles.brainvisa.utils.skip_list import \
     covered_by, load_skipped, record_skip
 from cortical_tiles.brainvisa.utils.bbox import compute_max_box
@@ -103,8 +103,7 @@ from cortical_tiles.brainvisa.utils.constants import \
 log = set_file_logger(__file__)
 _STEP = "generate_crops"
 # Stacks of the side that an earlier pass of the run order wrote
-_EARLIER_STACKS = {"foldlabel": ("skeleton",),
-                   "extremities": ("skeleton", "label")}
+_EARLIER_STACKS = {"foldlabel": ("skeleton",)}
 
 
 def crop_bbox(file_src: str, file_cropped: str,
@@ -628,79 +627,6 @@ class FoldLabelCropGenerator(CropGenerator):
         self.input_type = 'foldlabel'
 
 
-class ExtremitiesCropGenerator(CropGenerator):
-    """Generates cropped skeleton files and corresponding npy file
-    """
-
-    def __init__(self,
-                 src_dir=_RESAMPLED_SKELETON_DIR_DEFAULT,
-                 crop_dir=_CROP_DIR_DEFAULT,
-                 bbox_dir=_BBOX_DIR_DEFAULT,
-                 mask_dir=_MASK_DIR_DEFAULT,
-                 list_sulci=_SULCUS_DEFAULT,
-                 side=_SIDE_DEFAULT,
-                 cropping_type=_CROPPING_TYPE_DEFAULT,
-                 combine_type=_COMBINE_TYPE_DEFAULT,
-                 parallel=False,
-                 no_mask=_NO_MASK_DEFAULT,
-                 threshold=_THRESHOLD_DEFAULT,
-                 dilation=_DILATION_DEFAULT,
-                 njobs=_NB_JOBS_DEFAULT,
-                 excluded_subjects=frozenset(),
-                 skip_dir=None):
-        """Inits with list of directories and list of sulci
-        Args:
-            src_dir: folder containing generated extremities
-            crop_dir: name of output directory for crops with full path
-            bbox_dir: directory containing bbox json files
-                    (generated using compute_bounding_box.py)
-            mask_dir: directory containing mask files
-                    (generated using compute_mask.py)
-            list_sulci: list of sulcus names
-            side: hemisphere side (either L for left,
-                                   or R for right hemisphere)
-            cropping_type: cropping type, either mask, or bbox,
-                                   or mask_intersect
-            combine_type: if True, combines sulci (in this case, order matters)
-            parallel: if True, parallel computation
-        """
-        super(ExtremitiesCropGenerator, self).__init__(
-            src_dir=src_dir, crop_dir=crop_dir,
-            bbox_dir=bbox_dir, mask_dir=mask_dir,
-            list_sulci=list_sulci, side=side,
-            cropping_type=cropping_type, combine_type=combine_type,
-            parallel=parallel, no_mask=no_mask,
-            threshold=threshold, dilation=dilation,
-            excluded_subjects=excluded_subjects, skip_dir=skip_dir)
-
-        # Directory where to store cropped skeleton files
-        self.cropped_samples_dir = join(self.crop_dir,
-                                        self.side + 'extremities')
-
-        # Names of files in function of dictionary: keys -> 'subject'+'side'
-        # Generated skeleton from folding graphs
-        self.src_file = join(
-            self.src_dir,
-            '%(side)sresampled_extremities_%(subject)s.nii.gz')
-
-        # Names of files in function of dictionary: keys -> 'subject' and
-        # 'side'
-        self.cropped_file = '%(subject)s_cropped_extremities.nii.gz'
-
-        # subjects are detected as the nifti file names under src_dir
-        self.expr = '^.resampled_extremities_(.*).nii.gz$'
-
-        # Creates json log class
-        json_file = join(self.crop_dir, self.side + 'extremities.json')
-        self.json = LogJson(json_file)
-
-        # Creates npys file name
-        self.file_basename_npy = self.side + 'extremities'
-        self.file_basename_pickle = self.side + 'extremities'
-
-        self.input_type = 'extremities'
-
-
 class DistMapCropGenerator(CropGenerator):
     """Generates cropped skeleton files and corresponding npy file
     """
@@ -929,14 +855,12 @@ def generate_crops(
         crop = SkeletonCropGenerator(**params)
     elif input_type == "foldlabel":
         crop = FoldLabelCropGenerator(**params)
-    elif input_type == "extremities":
-        crop = ExtremitiesCropGenerator(**params)
     elif input_type == "distmap":
         crop = DistMapCropGenerator(**params)
     else:
         raise ValueError(
-            "input_type: shall be either 'skeleton', 'foldlabel', "
-            "'extremities' or 'distmap'")
+            "input_type: shall be either 'skeleton', 'foldlabel' "
+            "or 'distmap'")
 
     crop.compute(nb_subjects=nb_subjects)
     excluded |= crop.failed_subjects
@@ -948,8 +872,6 @@ def generate_crops(
 
     if input_type == "foldlabel":
         quality_checks(crop_dir, side)
-    elif input_type == "extremities":
-        quality_checks_extremities(crop_dir, side)
 
 
 @exception_handler
