@@ -127,12 +127,10 @@ STEP_FUNCTIONS = [
     "compute_mask",
     "generate_skeletons",
     "generate_distmaps",
-    "generate_extremities",
     "generate_foldlabels",
     "generate_ICBM2009c_transforms",
     "resample_files",
     "mask_foldlabel_files",
-    "mask_extremities_files",
     "generate_crops",
 ]
 

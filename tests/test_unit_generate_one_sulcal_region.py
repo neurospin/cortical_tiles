@@ -30,16 +30,14 @@ STEP_FUNCTIONS = [
     "compute_mask",
     "generate_skeletons",
     "generate_distmaps",
-    "generate_extremities",
     "generate_foldlabels",
     "generate_ICBM2009c_transforms",
     "resample_files",
     "mask_foldlabel_files",
-    "mask_extremities_files",
     "generate_crops",
 ]
 
-CROP_SUBDIR = {"skeleton": "crops", "foldlabel": "labels", "distmap": "distmaps", "extremities": "extremitiess"}
+CROP_SUBDIR = {"skeleton": "crops", "foldlabel": "labels", "distmap": "distmaps"}
 
 # The real functions, kept before the `calls` fixture replaces them, for their signatures.
 SKIP_DIR_STEPS = {
@@ -68,7 +66,6 @@ SKIP_DIR_RUNS = {
         "mask_foldlabel_files",
         "generate_crops",
     ),
-    ("extremities", 2.0): ("generate_ICBM2009c_transforms", "resample_files", "generate_crops"),
     ("skeleton", "raw"): ("generate_skeletons", "generate_crops"),
     ("foldlabel", "raw"): ("generate_foldlabels", "generate_crops"),
 }
@@ -306,7 +303,6 @@ def test_run_with_params_foldlabel_masked_with_resampled_skeletons(tmp_path, reg
         ("skeleton", "pipeline_params_Rcrops.json"),
         ("foldlabel", "pipeline_params_Rlabels.json"),
         ("distmap", "pipeline_params_Rdistmaps.json"),
-        ("extremities", "pipeline_params_Rextremities.json"),
     ],
 )
 def test_run_with_params_writes_params_json_next_to_crops(tmp_path, regions_json, calls, input_type, filename):

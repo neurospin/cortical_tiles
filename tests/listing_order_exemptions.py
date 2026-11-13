@@ -14,7 +14,6 @@ the calls it reports in this form. Value: the reason, a non-empty text.
 EXEMPTIONS: dict[tuple[str, str, str], str] = {
     ('cortical_tiles/brainvisa/benchmark_generation_distmap.py', 'get_sub_list', 'os.listdir(_DEFAULT_DATA_DIR)'): 'membership test only; the subject list order comes from subjects_list',
     ('cortical_tiles/brainvisa/generate_ICBM2009c_transforms.py', 'GraphGenerateTransform.compute', "glob.glob(f'{self.src_dir}/*/{self.path_to_graph}')"): 'only the number of files is compared',
-    ('cortical_tiles/brainvisa/generate_extremities.py', 'GraphConvert2Extremity.compute', "glob.glob(f'{self.src_dir}/*/{self.path_to_graph}')"): 'only the number of files is compared',
     ('cortical_tiles/brainvisa/generate_skeletons.py', 'GraphConvert2Skeleton.compute', "glob.glob(f'{self.src_dir}/*/{self.path_to_graph}')"): 'only the number of files is compared',
     ('cortical_tiles/brainvisa/generate_distmaps.py', 'SkelConvert2DistMap.find_skeleton_file', "glob.glob(f'{glob.escape(search_dir)}/*{suffix}')"): 'filtered into matches, which are sorted and must hold exactly one file',
     ('cortical_tiles/brainvisa/generate_distmaps.py', 'SkelConvert2DistMap.find_skeleton_file', "glob.glob(f'{glob.escape(search_dir)}/' + glob.escape(name))"): 'exact name; matches are sorted and must hold exactly one file',

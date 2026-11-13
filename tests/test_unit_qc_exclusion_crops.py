@@ -178,7 +178,7 @@ def test_empty_qc_path_excludes_no_subject(tmp_path, kwargs):
     assert _stacked_subjects(tmp_path, "skeleton") == ["a1", "b2"]
 
 
-@pytest.mark.parametrize("input_type", INPUT_TYPES)
+@pytest.mark.parametrize("input_type", ("skeleton", "foldlabel", "distmap"))
 def test_run_with_params_passes_skel_qc_path_to_generate_crops(tmp_path, regions_json, calls, input_type):  # noqa: F811
     """REQ-CTFAIL-BDRABCZUK-2C566F6580CA: the crop step of a region receives the QC file of --sk_qc_path."""
     params = _params(tmp_path, regions_json, skel_qc_path="/data/qc.tsv", input_type=input_type)

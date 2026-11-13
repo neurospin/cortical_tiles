@@ -63,12 +63,9 @@ from cortical_tiles.brainvisa.generate_distmaps import generate_distmaps
 from cortical_tiles.brainvisa.generate_foldlabels import generate_foldlabels
 from cortical_tiles.brainvisa.mask_resampled_foldlabels import \
     mask_foldlabel_files
-from cortical_tiles.brainvisa.mask_resampled_extremities import \
-    mask_extremities_files
 from cortical_tiles.brainvisa.generate_ICBM2009c_transforms import \
     generate_ICBM2009c_transforms
 from cortical_tiles.brainvisa.generate_skeletons import generate_skeletons
-from cortical_tiles.brainvisa.generate_extremities import generate_extremities
 from cortical_tiles.brainvisa.resample_files import resample_files
 
 
@@ -273,6 +270,11 @@ def run_with_params(params: dict):
         params: dictionary with all pipeline parameters (as returned by parse_args,
                 or built in-memory by RegionPipelineRunner).
     """
+    if params.get("input_type") == "extremities":
+        raise ValueError(
+            "input_type 'extremities' is no longer supported: "
+            "extremities crop generation was removed from cortical_tiles")
+
     # define shortcuts to create folders or run command lines
     if params['side'] == 'R':
         full_side = '_right'
@@ -285,8 +287,6 @@ def run_with_params(params: dict):
     match params['input_type']:
         case "foldlabel":
             src_filename = f"{params['input_type']}_"
-        case "extremities":
-            src_filename = f"{params['input_type']}_"
         case _:
             src_filename = f"{params['input_type']}_generated_"
 
@@ -297,8 +297,6 @@ def run_with_params(params: dict):
             cropdir_name = "distmap"
         case 'foldlabel':
             cropdir_name = "label"
-        case 'extremities':
-            cropdir_name = "extremities"
         case _:
             cropdir_name = "crop"
 
@@ -317,8 +315,6 @@ def run_with_params(params: dict):
 
     # Generates unsupervised output paths
     params['skeleton_dir'] = os.path.join(params["output_dir"], "skeletons")
-    params['extremities_dir'] = \
-        os.path.join(params["output_dir"], "extremities")
     params['distmaps_dir'] = os.path.join(params["output_dir"], "distmaps")
     params['foldlabel_dir'] = os.path.join(params["output_dir"], "foldlabels")
     params['transform_dir'] = os.path.join(params["output_dir"], "transforms")
@@ -377,7 +373,7 @@ def run_with_params(params: dict):
 
     ##########################################################
     # generate raw volumes
-    #  (either skeletons, extremities, foldlabels, or distmaps)
+    #  (either skeletons, foldlabels, or distmaps)
     ##########################################################
 
     # generate raw skeletons
@@ -453,45 +449,6 @@ def run_with_params(params: dict):
 
             generate_distmaps(**args_generate_distmaps)
             log.info('Raw distmaps generated')
-
-    # generate raw extremities if required
-    if params['input_type'] == 'extremities':
-        step = print_info(step, "generate raw extremities")
-        extremities_raw_path = os.path.join(
-            params['foldlabel_dir'], 'raw', params['side'])
-
-        if is_step_to_be_computed(
-            extremities_raw_path,
-            "Raw extremities",
-                save_behavior=save_behavior):
-
-            if (save_behavior == 'clear_and_compute' and
-                    os.path.exists(extremities_raw_path)):
-                #  remove the target folder
-                log.info(f"Delete {extremities_raw_path}")
-                shutil.rmtree(extremities_raw_path)
-
-            args_generate_extremities = {
-                'src_dir': params['graphs_dir'],
-                'extremities_dir': params['extremities_dir'] + '/raw',
-                'path_to_skeleton_with_hull':
-                    params['path_to_skeleton_with_hull'],
-                'path_to_graph': params['path_to_graph'],
-                'side': params['side'],
-                'bids': params['bids'],
-                'parallel': params['parallel'],
-                'nb_subjects': params['nb_subjects'],
-                'qc_path': params['skel_qc_path']}
-
-            setup_log(
-                Namespace(**{'verbose': log.level,
-                          **args_generate_extremities}),
-                log_dir=f"{args_generate_extremities['extremities_dir']}",
-                prog_name='pipeline_generate_extremities.py',
-                suffix=full_side[1:])
-
-            generate_extremities(**args_generate_extremities)
-            log.info('Raw extremities generated')
 
     # generate raw foldlabels if required
     if params['input_type'] == 'foldlabel':
@@ -583,10 +540,6 @@ def run_with_params(params: dict):
             raw_input = os.path.join(params['foldlabel_dir'], 'raw')
             resampled_dir = os.path.join(params['foldlabel_dir'], vox_size)
 
-        elif params['input_type'] == 'extremities':
-            raw_input = os.path.join(params['extremities_dir'], 'raw')
-            resampled_dir = os.path.join(params['extremities_dir'], vox_size)
-
         else:
             # raw data supposed to be skeletons by default
             raw_input = os.path.join(params['skeleton_dir'], 'raw')
@@ -595,8 +548,6 @@ def run_with_params(params: dict):
         # if foldlabel, we generate foldlabels before masking with skeletons
         path_resampled_path = os.path.join(resampled_dir, params['side'])
         if params['input_type'] == 'foldlabel':
-            path_resampled_path = path_resampled_path + "_before_masking"
-        elif params['input_type'] == 'extremities':
             path_resampled_path = path_resampled_path + "_before_masking"
 
         if is_step_to_be_computed(
@@ -670,38 +621,6 @@ def run_with_params(params: dict):
                 mask_foldlabel_files(**args_masked_files)
                 log.info(f"{params['input_type']} masked")
 
-        # Mask extremities with reskeletized skeletons
-        if params['input_type'] == "extremities":
-            masked_dir = os.path.join(params['extremities_dir'], vox_size)
-            skeleton_dir = os.path.join(params['skeleton_dir'], vox_size)
-            path_masked_path = os.path.join(masked_dir, params['side'])
-
-            if is_step_to_be_computed(
-                    path=path_masked_path,
-                    log_string=f"Masking {params['input_type']}s",
-                    save_behavior=save_behavior):
-                if save_behavior == 'clear_and_compute' and os.path.exists(
-                        path_masked_path):
-                    # remove the target folder
-                    log.info(f"Delete {path_masked_path}")
-                    shutil.rmtree(path_masked_path)
-
-                args_masked_files = {'src_dir': masked_dir,
-                                     'skeleton_dir': skeleton_dir,
-                                     'masked_dir': masked_dir,
-                                     'side': params['side'],
-                                     'nb_subjects': params['nb_subjects'],
-                                     'parallel': params['parallel']}
-
-                setup_log(Namespace(**{'verbose': log.level,
-                                    **args_masked_files}),
-                          log_dir=f"{args_masked_files['masked_dir']}",
-                          prog_name='pipeline_mask_resampled_extremities.py',
-                          suffix=full_side[1:])
-
-                mask_extremities_files(**args_masked_files)
-                log.info(f"{params['input_type']} masked")
-
     ##########################################################
     # generate crops
     ##########################################################
@@ -711,9 +630,6 @@ def run_with_params(params: dict):
     elif params['input_type'] == 'foldlabel':
         raw_input = params['foldlabel_dir']
         resampled_dir = os.path.join(params['foldlabel_dir'], vox_size)
-    elif params['input_type'] == 'extremities':
-        raw_input = params['extremities_dir']
-        resampled_dir = os.path.join(params['extremities_dir'], vox_size)
     else:
         # raw data supposed to be skeletons by default
         raw_input = params['skeleton_dir']

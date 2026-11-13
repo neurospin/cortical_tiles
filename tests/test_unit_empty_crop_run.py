@@ -47,9 +47,9 @@ KEPT = ["a1", "c3"]
 THIN = "a1"
 STEP = "generate_crops"
 SIDES = ("L", "R")
-INPUT_TYPES = ("skeleton", "foldlabel", "extremities")
+INPUT_TYPES = ("skeleton", "foldlabel")
 SOURCE_KINDS = (*INPUT_TYPES, "distmap")
-STACKS = ("skeleton", "label", "extremities")
+STACKS = ("skeleton", "label")
 # Run order: FIRST is cropped before the defect is found in HOLLOW, LAST after it.
 FIRST, HOLLOW, LAST = "S.Or.", "S.T.s.", "S.Pe.C."
 REGIONS = (FIRST, HOLLOW, LAST)
@@ -105,13 +105,12 @@ class EmptyCropRun:
         return self.out / KIND_DIRS[kind] / "2mm" / side / f"{side}resampled_{kind}_{subject}.nii.gz"
 
     def thin_out(self, subject):
-        """Leaves the subject one skeleton voxel in each mask box and all-zero extremities, on each side."""
+        """Leaves the subject one skeleton voxel in each mask box, on each side."""
         skeleton = np.zeros(SHAPE, dtype=np.int16)
         skeleton[3, 4, 5, 0] = skeleton[7, 9, 11, 0] = 60
         volumes = {
             "skeleton": skeleton,
             "foldlabel": np.where(skeleton != 0, 1003, 0),
-            "extremities": np.zeros_like(skeleton),
         }
         for side in SIDES:
             for kind, volume in volumes.items():
@@ -303,8 +302,8 @@ def test_empty_crop_leaves_skip_list_outside_sides_unchanged(empty_crop_run):
 
 @pytest.mark.parametrize("subjects", [("a1", EMPTY, "c3"), tuple(KEPT)], ids=["one_subject_dropped", "none_dropped"])
 def test_subject_without_empty_crop_stays_in_the_stacks(empty_crop_run, subjects):
-    """REQ-CTFAIL-BDRABCZUK-1823CE233AA2: regression guard, passes in red: the drop stays narrow, a single voxel per
-    region keeps THIN and its all-zero extremities drop nobody. Membership only: EMPTY leaving is REQ 3817C6341B42's."""
+    """REQ-CTFAIL-BDRABCZUK-914072079AD0: regression guard, passes in red: the drop stays narrow, a single voxel per
+    region keeps THIN. Membership only: EMPTY leaving is REQ 3817C6341B42's."""
     run = empty_crop_run(subjects=subjects)
     run.thin_out(THIN)
 
@@ -313,7 +312,7 @@ def test_subject_without_empty_crop_stays_in_the_stacks(empty_crop_run, subjects
     for side in SIDES:
         assert not {subject for subject, _ in run.entries(side)} & set(KEPT), side
         for region in REGIONS:
-            for stack in ("skeleton", "extremities"):
+            for stack in ("skeleton",):
                 assert set(KEPT) <= set(run.stacked(region, side, stack)), (region, side, stack)
 
 
@@ -339,13 +338,13 @@ def test_empty_crop_deletes_cropped_files_of_each_input_type(empty_crop_run):
 
     run.run(input_types=(*INPUT_TYPES, "distmap"))
 
-    kinds = ("skeleton", "foldlabel", "extremities", "distmap")
+    kinds = ("skeleton", "foldlabel", "distmap")
     assert {f"{THIN}_cropped_{kind}.nii.gz" for kind in kinds} <= set(run.crop_files(FIRST, "R", THIN))
     assert run.crop_files(FIRST, "R", EMPTY) == []
 
 
 def test_empty_crop_deletion_passes_over_input_types_not_run(empty_crop_run):
-    """REQ-CTFAIL-BDRABCZUK-24A1E69B1C83: a run of the skeleton alone has no labels or extremities directory."""
+    """REQ-CTFAIL-BDRABCZUK-24A1E69B1C83: a run of the skeleton alone has no labels directory."""
     run = empty_crop_run()
 
     assert run.run(input_types=("skeleton",)) == 3

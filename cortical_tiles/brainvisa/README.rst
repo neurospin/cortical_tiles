@@ -32,7 +32,7 @@ In OUTPUT_DIR, create a json file named pipeline_loop_2mm.json, which contains (
       "brain_regions_json": "PROGRAM_DIR/cortical_tiles/data/sulci_regions_gridsearch.json",
       "parallel": true,
       "nb_subjects": -1,
-      "input_type": "extremities",
+      "input_type": "skeleton",
       "labeled_subjects_dir": "",
       "path_to_graph_supervised": "",
       "supervised_output_dir": "PROGRAM_DIR/cortical_tiles/data",

@@ -32,7 +32,9 @@ _CORTICAL_TILES_VERSION = "2026"
 _EXIT_NO_VALID_SUBJECT = 1
 _EXIT_PARTIAL = 3
 _SIDES_DEFAULT = ["L", "R"]
-_INPUT_TYPES_DEFAULT = ["skeleton", "foldlabel", "extremities"]
+_INPUT_TYPES_DEFAULT = ["skeleton", "foldlabel"]
+# Input type whose crop generation was removed; an explicit request is refused
+_REMOVED_INPUT_TYPE = "extremities"
 _REGIONS_DEFAULT = ["S.C.-sylv.", "S.C.-S.Pe.C.", "S.C.-S.Po.C.",\
             "S.Pe.C.", "S.Po.C.", "S.F.int.-F.C.M.ant.",\
             "S.F.inf.-BROCA-S.Pe.C.inf.", "S.T.s.", "Sc.Cal.-S.Li.",\
@@ -46,6 +48,19 @@ _REGIONS_DEFAULT = ["S.C.-sylv.", "S.C.-S.Pe.C.", "S.C.-S.Po.C.",\
             "F.C.L.p.-subsc.-F.C.L.a.-INSULA.", "S.F.int.-S.R.",\
             "S.Call.", "S.Call.-S.s.P.-S.intraCing."\
             ]
+
+
+def _parse_input_type(value):
+    """Return one -y value unchanged, refusing the removed extremities input type.
+
+    Raises argparse.ArgumentTypeError (argparse exits with status 2) for extremities only;
+    other values pass through as before.
+    """
+    if value == _REMOVED_INPUT_TYPE:
+        raise argparse.ArgumentTypeError(
+            f"input type '{_REMOVED_INPUT_TYPE}' is no longer supported: "
+            "its crop generation was removed from cortical_tiles")
+    return value
 
 
 def parse_args(argv):
@@ -91,8 +106,8 @@ def parse_args(argv):
              'Example: -i L R'
              'Default is : ' + ' '.join(_SIDES_DEFAULT))
     parser.add_argument(
-        "-y", "--input_types", type=str, default=_INPUT_TYPES_DEFAULT, nargs='+',
-        help='Input types: \'skeleton\', \'foldlabel\', \'extremities\'. '
+        "-y", "--input_types", type=_parse_input_type, default=_INPUT_TYPES_DEFAULT, nargs='+',
+        help='Input types: \'skeleton\', \'foldlabel\'. '
         'Give the desired types one after the other. '
         'Example: -y skeleton foldlabel'
         'Default is : ' + ' '.join(_INPUT_TYPES_DEFAULT))
