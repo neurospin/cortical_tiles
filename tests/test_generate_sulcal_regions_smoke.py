@@ -15,7 +15,7 @@ characterization recorded on 2026-10-01 (pixi default env of champollion_pipelin
 dev 3fdc2ef). The 2mm resampling step is not reproducible run to run: the raw skeleton and the
 transform are byte-identical across runs but the resampled skeleton is not, and over 10 runs the
 S.Or. crop held 550-572 non-zero voxels with value set within {0, 30, 35, 40, 60, 70, 80}. The test
-therefore pins what is stable (crop geometry, dtype, masking, skeleton/distbottom consistency) and
+therefore pins what is stable (crop geometry, dtype, masking) and
 bounds the voxel count with a band instead of an exact reference.
 
 Every path is anchored on this file (not the cwd) and every output goes to a pytest tmp dir.
@@ -44,7 +44,6 @@ EXPECTED_CROP_SHAPE = (26, 34, 23, 1)  # bounding box of the 2mm S.Or._right mas
 EXPECTED_VOXEL_SIZE = (2.0, 2.0, 2.0)
 SKELETON_NONZERO_BAND = (500, 620)  # observed 550-572 over 10 runs
 SKELETON_ALLOWED_VALUES = {0, 30, 35, 40, 60, 70, 80}
-DISTBOTTOM_BACKGROUND = 32501  # value written wherever the skeleton crop is 0
 
 
 def _pipeline_config(subjects_dir, output_dir, regions_json, labeled_dir):
@@ -77,7 +76,6 @@ def _pipeline_config(subjects_dir, output_dir, regions_json, labeled_dir):
         "no_mask": False,
         "threshold": 0,
         "dilation": 5,
-        "skip_distbottom": False,
         "masks_version": "canonical_25",
     }
 
@@ -149,20 +147,3 @@ def test_skeleton_crop_matches_characterization(crop_dir):
     assert stacked.shape == (1, *EXPECTED_CROP_SHAPE)
     np.testing.assert_array_equal(stacked[0], skeleton)
     assert np.load(os.path.join(crop_dir, "sub_id.npy")).tolist() == [SUBJECT]
-
-
-def test_distbottom_crop_matches_skeleton_crop(crop_dir):
-    """REQ-CTILESTEST-06: distbottom crop is background exactly where the skeleton crop is 0."""
-    skeleton, _ = _read_volume(os.path.join(crop_dir, f"{SIDE}crops", f"{SUBJECT}_cropped_skeleton.nii.gz"))
-    distbottom, voxel_size = _read_volume(
-        os.path.join(crop_dir, f"{SIDE}distbottom", f"{SUBJECT}_cropped_distbottom.nii.gz")
-    )
-    assert distbottom.shape == EXPECTED_CROP_SHAPE
-    assert distbottom.dtype == np.int16
-    assert voxel_size == EXPECTED_VOXEL_SIZE
-    np.testing.assert_array_equal(distbottom == DISTBOTTOM_BACKGROUND, skeleton == 0)
-    assert int((distbottom[skeleton != 0] < 0).sum()) == 0
-
-    stacked = np.load(os.path.join(crop_dir, f"{SIDE}distbottom.npy"))
-    assert stacked.shape == (1, *EXPECTED_CROP_SHAPE)
-    np.testing.assert_array_equal(stacked[0], distbottom)

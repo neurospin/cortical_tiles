@@ -38,7 +38,6 @@ _RUN_STACKS = (
     ("label", "labels", "foldlabel"),
     ("extremities", "extremities", "extremities"),
     ("distmap", "distmaps", "distmap"),
-    ("distbottom", "distbottom", "distbottom"),
 )
 _SAMPLE_DIRS = {kind: sample_dir for _, sample_dir, kind in _RUN_STACKS}
 
@@ -286,10 +285,6 @@ def _exclude_from_side(crop_dir, side, subjects):
         for subject in subjects:
             remove_crop_file(join(crop_dir, f"{side}{sample_dir}",
                                   f"{subject}_cropped_{kind}.nii.gz"))
-    pickle_file = join(crop_dir, f"{side}distbottom.pkl")
-    if os.path.isfile(pickle_file):
-        pd.read_pickle(pickle_file).drop(
-            columns=list(subjects), errors="ignore").to_pickle(pickle_file)
 
 
 def exclude_empty_crops(crop_dirs, subjects, sides):

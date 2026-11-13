@@ -59,8 +59,6 @@ from cortical_tiles.brainvisa.utils.skip_list import SKIP_LIST_FILENAME, \
 
 from cortical_tiles.brainvisa.compute_mask import compute_mask
 from cortical_tiles.brainvisa.generate_crops import generate_crops
-from cortical_tiles.brainvisa.generate_distbottom_crops import \
-    generate_distbottom_crops
 from cortical_tiles.brainvisa.generate_distmaps import generate_distmaps
 from cortical_tiles.brainvisa.generate_foldlabels import generate_foldlabels
 from cortical_tiles.brainvisa.mask_resampled_foldlabels import \
@@ -775,50 +773,6 @@ def run_with_params(params: dict):
                   f"/pipeline_params_{params['side']}{cropdir_name}{_sfx}.json",
                   'w') as file:
             json.dump(params, file, indent=2)
-
-    ##########################################################
-    # generate distbottom crops
-    ##########################################################
-    if params['input_type'] == 'skeleton' and not params.get('skip_distbottom', False):
-        path_to_distbottom_complete = path_to_crops + \
-            '/' + params['side'] + "distbottom"
-
-        step = print_info(step, "generate distbottom crops")
-        if is_step_to_be_computed(
-                path=path_to_distbottom_complete,
-                log_string="Distbottoms",
-                save_behavior=save_behavior):
-            if save_behavior == 'clear_and_compute' and os.path.exists(
-                    path_to_distbottom_complete):
-                # remove the target folder
-                log.info(f"Delete {path_to_distbottom_complete}")
-                shutil.rmtree(path_to_distbottom_complete)
-
-            args_generate_distbottom = {
-                'src_dir': path_to_crops,
-                'crop_dir': path_to_crops,
-                'side': params['side'],
-                'parallel': params['parallel'],
-                'nb_subjects': params['nb_subjects'],
-                'skip_dir': params['output_dir'],
-                'qc_path': params.get('skel_qc_path', '')}
-
-            setup_log(
-                Namespace(**{'verbose': log.level,
-                             **args_generate_distbottom}),
-                log_dir=f"{args_generate_distbottom['crop_dir']}",
-                prog_name='generate_distbottom_crops.py',
-                suffix=full_side[1:])
-
-            generate_distbottom_crops(**args_generate_distbottom)
-            log.info('Crops generated')
-
-            # save params json where the crops lie
-            _sfx = '' if cropdir_name.endswith('s') else 's'
-            with open(path_to_crops +
-                      f"/pipeline_params_{params['side']}{cropdir_name}{_sfx}.json",
-                      'w') as file:
-                json.dump(params, file, indent=2)
 
 
 @exception_handler

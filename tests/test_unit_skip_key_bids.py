@@ -30,7 +30,6 @@ from tests import test_unit_generate_one_sulcal_region as region_tests
 from tests import test_unit_mask_resampled_foldlabels as mask_tests
 from tests import test_unit_resample_files as resample_tests
 from tests.test_unit_generate_sulcal_regions import gsr, script  # noqa: F401
-from tests.test_unit_qc_exclusion_crops import _distbottom_subjects, distbottom  # noqa: F401
 
 SUBJECT = "sub-1"
 # One graph file per scan; the folder name of a scan is also what its key adds to the subject name
@@ -233,19 +232,8 @@ def _stacked_keys(tmp_path, monkeypatch, keys, entries):
     return set(crop_tests._stacked_subjects(tmp_path, "skeleton"))
 
 
-def _distbottom_keys(tmp_path, monkeypatch, distbottom_run, keys, entries):
-    """Reruns generate_distbottom_crops over the files of an earlier run, with entries in the skip list."""
-    out = _cropped_layout(tmp_path, monkeypatch, keys)
-    distbottom_run(skip_dir=str(out))
-    for entry in entries:
-        crop_tests._skip(out, entry)
-    crop_tests._crop(tmp_path, out, "skeleton")
-    distbottom_run(skip_dir=str(out))
-    return set(_distbottom_subjects(tmp_path))
-
-
 @pytest.fixture
-def file_step_keys(tmp_path, monkeypatch, distbottom):  # noqa: F811
+def file_step_keys(tmp_path, monkeypatch):
     """Returns run(step, keys, entries): the keys a file step processed, with entries in the skip list."""
 
     def run(step, keys, entries):
@@ -253,9 +241,7 @@ def file_step_keys(tmp_path, monkeypatch, distbottom):  # noqa: F811
             return _resampled_keys(tmp_path, keys, entries)
         if step == "mask_resampled_foldlabels":
             return _masked_keys(tmp_path, keys, entries)
-        if step == "generate_crops":
-            return _stacked_keys(tmp_path, monkeypatch, keys, entries)
-        return _distbottom_keys(tmp_path, monkeypatch, distbottom, keys, entries)
+        return _stacked_keys(tmp_path, monkeypatch, keys, entries)
 
     return run
 
@@ -266,10 +252,9 @@ def test_subject_entry_filters_session_files_at_resample_and_mask(file_step_keys
     assert file_step_keys(step, (OF_THE_SUBJECT, OF_ANOTHER_SUBJECT), [SUBJECT]) == {OF_ANOTHER_SUBJECT}
 
 
-@pytest.mark.parametrize("step", ["generate_crops", "generate_distbottom_crops"])
-def test_subject_entry_leaves_session_keys_out_of_the_crop_stacks(file_step_keys, step):
+def test_subject_entry_leaves_session_keys_out_of_the_crop_stacks(file_step_keys):
     """REQ-CTFAIL-BDRABCZUK-AA25426AE8F1: the files of the subject left by an earlier run leave the stack."""
-    assert file_step_keys(step, (OF_THE_SUBJECT, OF_ANOTHER_SUBJECT), [SUBJECT]) == {OF_ANOTHER_SUBJECT}
+    assert file_step_keys("generate_crops", (OF_THE_SUBJECT, OF_ANOTHER_SUBJECT), [SUBJECT]) == {OF_ANOTHER_SUBJECT}
 
 
 def test_subject_entry_covers_a_one_sided_session_key(tmp_path, monkeypatch):
@@ -298,9 +283,7 @@ def test_subject_entry_leaves_session_keys_out_of_the_count_check(tmp_path):
         region_tests.COUNT_CHECK(resampled_dir, skeleton_dir, FILE_SIDE, str(tmp_path))
 
 
-@pytest.mark.parametrize(
-    "step", ["resample_files", "mask_resampled_foldlabels", "generate_crops", "generate_distbottom_crops"]
-)
+@pytest.mark.parametrize("step", ["resample_files", "mask_resampled_foldlabels", "generate_crops"])
 def test_session_entry_keeps_the_other_sessions_at_file_steps(file_step_keys, step):
     """REQ-CTFAIL-BDRABCZUK-4E7F1BB8E49C: the entry of one session leaves out that session only."""
     assert file_step_keys(step, (OF_THE_SUBJECT, OTHER_SESSION), [OF_THE_SUBJECT]) == {OTHER_SESSION}

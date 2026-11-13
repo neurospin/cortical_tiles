@@ -30,8 +30,6 @@ EXEMPTIONS: dict[tuple[str, str, str], str] = {
     ('cortical_tiles/brainvisa/utils/quality_checks.py', 'get_not_processed_files_general', "glob.glob(f'{tgt_dir}/*.nii.gz')"): "set difference of subjects; the order reaches only a 'first file' log line",
     ('cortical_tiles/brainvisa/utils/quality_checks.py', 'get_not_processed_subjects_dict', "glob.glob(f'{tgt_dir}/*.nii.gz')"): "set difference of subjects; the order reaches only a 'first file' log line",
     ('cortical_tiles/brainvisa/utils/quality_checks.py', 'get_not_processed_cropped_files', "glob.glob(f'{tgt_dir}/*.nii.gz')"): "set difference of subjects; the order reaches only a 'first file' log line",
-    ('cortical_tiles/brainvisa/utils/quality_checks.py', 'get_not_processed_distbottom_files', "glob.glob(f'{src_dir}/*.nii.gz')"): 'set difference of subjects; only the folder of the first file is used, and all files share it',
-    ('cortical_tiles/brainvisa/utils/quality_checks.py', 'get_not_processed_distbottom_files', "glob.glob(f'{tgt_dir}/*.nii.gz')"): "set difference of subjects; the order reaches only a 'first file' log line",
     ('cortical_tiles/brainvisa/utils/quality_checks.py', 'get_not_processed_subjects', "glob.glob(f'{tgt_dir}/*.nii.gz')"): "set difference of subjects; the order reaches only a 'first file' log line",
     ('cortical_tiles/brainvisa/utils/quality_checks.py', 'get_not_processed_subjects_distmap', "glob.glob(f'{tgt_dir}/*.nii.gz')"): "set difference of subjects; the order reaches only a 'first file' log line",
     ('cortical_tiles/brainvisa/utils/quality_checks.py', 'get_not_processed_subjects_transform', "glob.glob(f'{tgt_dir}/*.trm')"): "set difference of subjects; the order reaches only a 'first file' log line",

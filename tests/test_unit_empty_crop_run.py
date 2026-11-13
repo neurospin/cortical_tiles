@@ -2,18 +2,14 @@
 
 User decision 2026-11-04: one all-zero skeleton crop in any region and side fails the whole scan, every region and
 both sides, regions already cropped included; the other subjects carry on and the run ends with exit 3.
-User answers to the design questions, same day: generate_distbottom_crops honours the skip list and the end of the
-run deletes the cropped files of the dropped subject; each skeleton stack row is checked, so an empty crop left by an
-earlier run counts as well.
+User answers to the design questions, same day: the end of the run deletes the cropped files of the dropped subject;
+each skeleton stack row is checked, so an empty crop left by an earlier run counts as well.
 
 ``generate_sulcal_regions.py`` runs as a script, as in test_unit_generate_sulcal_regions.py. Only
-``run_with_params`` is replaced, by calls of the real ``generate_crops`` and ``generate_distbottom_crops`` on the crop
-directory it would use, so the region loop, the skip lists, the crops and the quality checks are real and no graph is
-needed. Only the distance computation of a distbottom volume is stubbed: a volume this small has no bottom voxel in
-each crop.
+``run_with_params`` is replaced, by calls of the real ``generate_crops`` on the crop directory it would use, so the
+region loop, the skip lists, the crops and the quality checks are real and no graph is needed.
 """
 
-import inspect
 import json
 import logging
 import os
@@ -25,8 +21,6 @@ import numpy as np
 import pandas as pd
 import pytest
 from cortical_tiles.brainvisa import generate_crops as gc
-from cortical_tiles.brainvisa import generate_distbottom_crops as gd
-from cortical_tiles.brainvisa import generate_one_sulcal_region as gosr
 from cortical_tiles.brainvisa.utils import skip_list
 
 from .test_unit_generate_crops import (
@@ -43,7 +37,6 @@ from .test_unit_generate_crops import (
     _subject_set_layout,
     _write_volume,
 )
-from .test_unit_generate_one_sulcal_region import REGION, STEP_FUNCTIONS, _params
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BRAINVISA_DIR = os.path.join(REPO_DIR, "cortical_tiles", "brainvisa")
@@ -56,7 +49,7 @@ STEP = "generate_crops"
 SIDES = ("L", "R")
 INPUT_TYPES = ("skeleton", "foldlabel", "extremities")
 SOURCE_KINDS = (*INPUT_TYPES, "distmap")
-STACKS = ("skeleton", "label", "extremities", "distbottom")
+STACKS = ("skeleton", "label", "extremities")
 # Run order: FIRST is cropped before the defect is found in HOLLOW, LAST after it.
 FIRST, HOLLOW, LAST = "S.Or.", "S.T.s.", "S.Pe.C."
 REGIONS = (FIRST, HOLLOW, LAST)
@@ -66,17 +59,10 @@ MASK_BOXES = {
     LAST: np.s_[2:5, 3:7, 4:9],
 }
 SIDE_NAMES = {"L": "left", "R": "right"}
-OUTSIDE_SKELETON = 32501  # value of a distbottom voxel off the skeleton, as quality_checks expects it
 
 
 class RunStopped(Exception):
     """The run goes down in the region loop, as a killed job does: nothing after the loop runs."""
-
-
-def _write_distbottom(skeleton_file, distbottom_file):
-    """Stands in for generate_distbottom: the distance computation is not under test here."""
-    skeleton = _read(skeleton_file)
-    _write_volume(distbottom_file, np.where(skeleton == 0, OUTSIDE_SKELETON, skeleton).astype(np.int16))
 
 
 def _volume(kind, subject, hollow):
@@ -145,10 +131,9 @@ class EmptyCropRun:
         zeros = np.zeros_like(_read(skeleton))
         _write_volume(skeleton, zeros)
         _write_volume(crop_dir / f"{side}labels" / f"{subject}_cropped_foldlabel.nii.gz", zeros)
-        _write_volume(crop_dir / f"{side}distbottom" / f"{subject}_cropped_distbottom.nii.gz", zeros + OUTSIDE_SKELETON)
 
     def _run_with_params(self, cfg):
-        """generate_crops, then generate_distbottom_crops for a skeleton, as run_with_params calls them."""
+        """generate_crops, as run_with_params calls it."""
         if cfg["region_name"] == self.stop_before:
             raise RunStopped(self.stop_before)
         side, crop_dir = cfg["side"], self.crop_dir(cfg["region_name"])
@@ -163,10 +148,6 @@ class EmptyCropRun:
             dilation=2,
             skip_dir=cfg["output_dir"],
         )
-        if cfg["input_type"] == "skeleton":
-            gd.generate_distbottom_crops(
-                src_dir=str(crop_dir), crop_dir=str(crop_dir), side=side, skip_dir=cfg["output_dir"]
-            )
 
     def run(self, sides=SIDES, regions=REGIONS, input_types=INPUT_TYPES, stop_before=None):
         """Runs the script and returns its exit code; caplog then holds the records of this run."""
@@ -204,11 +185,8 @@ class EmptyCropRun:
 @pytest.fixture
 def empty_crop_run(monkeypatch, tmp_path_factory, caplog):
     monkeypatch.syspath_prepend(BRAINVISA_DIR)
-    monkeypatch.setattr(gd, "generate_distbottom", _write_distbottom)
 
     def build(root=None, **kwargs):
-        # Not tmp_path, which starts with the test name: get_not_processed_distbottom_files cuts whole paths at the
-        # first "_cropped", so a test named test_..._cropped_... would see no subject to process.
         return EmptyCropRun(root or tmp_path_factory.mktemp("scan"), monkeypatch, caplog, **kwargs)
 
     return build
@@ -339,92 +317,6 @@ def test_subject_without_empty_crop_stays_in_the_stacks(empty_crop_run, subjects
                 assert set(KEPT) <= set(run.stacked(region, side, stack)), (region, side, stack)
 
 
-# --- generate_distbottom_crops and the skip list --------------------------------------------------------------------
-
-
-@pytest.fixture
-def distbottom(monkeypatch, tmp_path):
-    """Runs the real generate_distbottom_crops on tmp_path/crops, as run_with_params does, and returns its subjects."""
-    monkeypatch.setattr(gd, "generate_distbottom", _write_distbottom)
-    crop_dir = tmp_path / "crops"
-
-    def run(**kwargs):
-        gd.generate_distbottom_crops(src_dir=str(crop_dir), crop_dir=str(crop_dir), side=SIDE, **kwargs)
-        subjects = pd.read_csv(crop_dir / f"{SIDE}distbottom_subject.csv", dtype=str)["Subject"].tolist()
-        assert np.load(crop_dir / f"{SIDE}distbottom.npy").shape[0] == len(subjects)
-        return subjects
-
-    return run
-
-
-@pytest.mark.parametrize(
-    "cause",
-    [ValueError("empty crop"), FileNotFoundError("no resampled foldlabel file")],
-    ids=["empty_crop", "one_sided_subject"],
-)
-def test_distbottom_leaves_skip_listed_subject_out_of_the_stack(tmp_path, distbottom, cause):
-    """REQ-CTFAIL-BDRABCZUK-640110C35A06: the rerun crash of the design report: the crop files of the subject are still
-    on disk, its skeleton row is gone, and the quality checks stopped the run on the shapes; the one-sided subject,
-    whose rerun stack this changes, was accepted by the user."""
-    out = _subject_set_layout(tmp_path, skeleton=("a1", EMPTY, "c3"))
-    _crop(tmp_path, out, "skeleton")
-    distbottom(skip_dir=str(out))
-    skip_list.record_skip(str(out), SIDE, STEP, EMPTY, cause)
-    _crop(tmp_path, out, "skeleton")
-
-    assert distbottom(skip_dir=str(out)) == KEPT
-
-
-def test_distbottom_skip_list_lies_in_skip_dir_argument(tmp_path, distbottom):
-    """REQ-CTFAIL-BDRABCZUK-4C6F598696FC: the list of skip_dir decides, the one of crop_dir has no say."""
-    out = _subject_set_layout(tmp_path, skeleton=("a1", EMPTY, "c3"))
-    shared = tmp_path / "shared_skip_lists"
-    _crop(tmp_path, out, "skeleton")
-    skip_list.record_skip(str(shared), SIDE, STEP, EMPTY, ValueError("empty crop"))
-    skip_list.record_skip(str(tmp_path / "crops"), SIDE, STEP, "c3", ValueError("empty crop"))
-    _crop(tmp_path, out, "skeleton", skip_dir=shared)
-
-    assert distbottom(skip_dir=str(shared)) == KEPT
-
-
-def test_distbottom_without_skip_dir_reads_skip_list_of_crop_dir(tmp_path, distbottom):
-    """REQ-CTFAIL-BDRABCZUK-C3F1B69868FC: the default of generate_crops, so the two steps of a region read one list."""
-    out = _subject_set_layout(tmp_path, skeleton=("a1", EMPTY, "c3"))
-    crop_dir = tmp_path / "crops"
-    _crop(tmp_path, out, "skeleton", skip_dir=crop_dir)
-    skip_list.record_skip(str(crop_dir), SIDE, STEP, EMPTY, ValueError("empty crop"))
-    _crop(tmp_path, out, "skeleton", skip_dir=crop_dir)
-
-    assert distbottom() == KEPT
-
-
-def test_run_with_params_passes_output_dir_to_distbottom_as_skip_dir(tmp_path, monkeypatch):
-    """REQ-CTFAIL-BDRABCZUK-DC09EB4D6282: the skip lists of a run lie in output_dir, not in the crop directory."""
-    regions_json = tmp_path / "regions.json"
-    regions_json.write_text(json.dumps({"brain": {f"{REGION}_right": {f"{REGION}_right": 1}}}))
-    params = _params(tmp_path, str(regions_json))
-    calls = {}
-
-    def recorder(name):
-        def record(**kwargs):
-            calls[name] = kwargs
-            if name == "generate_crops":
-                os.makedirs(os.path.join(kwargs["crop_dir"], f"{kwargs['side']}crops"), exist_ok=True)
-
-        return record
-
-    for name in STEP_FUNCTIONS:
-        monkeypatch.setattr(gosr, name, recorder(name))
-    monkeypatch.setattr(gosr, "setup_log", lambda *args, **kwargs: None)
-    monkeypatch.setattr(gosr, "check_if_number_skeletons_equals_number_foldlabels", lambda *args, **kwargs: None)
-    signature = inspect.signature(gd.generate_distbottom_crops)
-
-    gosr.run_with_params(params)
-
-    assert calls["generate_distbottom_crops"].get("skip_dir") == params["output_dir"]
-    signature.bind(**calls["generate_distbottom_crops"])
-
-
 # --- the end of the run deletes the cropped files of the dropped subject, and nothing else --------------------------
 
 
@@ -447,7 +339,7 @@ def test_empty_crop_deletes_cropped_files_of_each_input_type(empty_crop_run):
 
     run.run(input_types=(*INPUT_TYPES, "distmap"))
 
-    kinds = ("skeleton", "foldlabel", "extremities", "distmap", "distbottom")
+    kinds = ("skeleton", "foldlabel", "extremities", "distmap")
     assert {f"{THIN}_cropped_{kind}.nii.gz" for kind in kinds} <= set(run.crop_files(FIRST, "R", THIN))
     assert run.crop_files(FIRST, "R", EMPTY) == []
 
@@ -587,7 +479,7 @@ def test_earlier_empty_crop_deletes_the_cropped_file(tmp_path):
 
 
 def test_earlier_empty_crop_fails_the_whole_scan(empty_crop_run):
-    """REQ-CTFAIL-BDRABCZUK-9E913FF706E6: the crop and the distbottom file of the first run stay on disk in HOLLOW; the
+    """REQ-CTFAIL-BDRABCZUK-9E913FF706E6: the crop of the first run stays on disk in HOLLOW; the
     run goes through and the subject leaves each region and side, as for a crop of this run."""
     run = empty_crop_run(hollow=())
     run.run()

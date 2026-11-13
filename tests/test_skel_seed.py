@@ -134,7 +134,6 @@ STEP_FUNCTIONS = [
     "mask_foldlabel_files",
     "mask_extremities_files",
     "generate_crops",
-    "generate_distbottom_crops",
 ]
 
 

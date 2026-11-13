@@ -4,8 +4,7 @@ Subjects that ``select_good_qc`` removes under ``--sk_qc_path`` (a qc value of 0
 out of the stacked crop arrays of a side, whichever of their intermediate files an earlier run left on disk. The
 exclusion stays in memory: such a subject gets no entry in the skip list of the side being cropped, so that it never
 turns a run into exit code 3. A subject QC keeps that an earlier run left with one cropped file and no resampled file
-cannot be in both stacks: it leaves them and is recorded. generate_distbottom_crops follows the same QC file, so the
-distbottom stack stays aligned with the skeleton stack. In BIDS mode a key of the QC file is a folder name (sub-1) and a
+cannot be in both stacks: it leaves them and is recorded. In BIDS mode a key of the QC file is a folder name (sub-1) and a
 crop key a file name (sub-1_ses-1): a key passes QC by itself or by its form without trailing session parts.
 
 Layout and stack helpers come from test_unit_generate_crops, the run_with_params harness from
@@ -16,10 +15,8 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import pytest
 from cortical_tiles.brainvisa import generate_crops as gc
-from cortical_tiles.brainvisa import generate_distbottom_crops as gd
 from cortical_tiles.brainvisa import generate_one_sulcal_region as gosr
 from cortical_tiles.brainvisa.utils import skip_list
 from hypothesis import Phase, assume, given, settings
@@ -29,11 +26,9 @@ from tests.test_unit_generate_crops import (
     KIND_DIRS,
     SEEDS,
     SIDE,
-    _read,
     _skip,
     _stacked_subjects,
     _subject_set_layout,
-    _write_volume,
 )
 from tests.test_unit_generate_one_sulcal_region import _called, _params, calls, regions_json  # noqa: F401
 
@@ -47,7 +42,6 @@ SKELETON_FOLDLABEL = ("skeleton", "foldlabel")
 INPUT_TYPES = ("skeleton", "foldlabel", "extremities", "distmap")
 # The passes that come before an input_type and write stacks its own pass reads
 EARLIER_PASSES = {"foldlabel": ("skeleton",), "extremities": ("skeleton",)}
-OUTSIDE_SKELETON = 32501  # value of a distbottom voxel off the skeleton, as the distbottom quality_checks expects
 
 
 def _qc_file(tmp_path, states):
@@ -385,116 +379,13 @@ def test_property_stacks_agree_for_each_set_of_intermediate_files(cases):
         assert _stacked_subjects(root, "foldlabel") == expected
 
 
-# --- generate_distbottom_crops under the QC file ---------------------------------------------------------------------
-# Test names keep "_cropped" out of tmp_path: DEF-CTFAIL-BDRABCZUK-C930C8933449. No test passes skip_dir: its default,
-# the crop directory, holds no list here.
-
-
-def _write_distbottom(skeleton_file, distbottom_file):
-    """Stands in for generate_distbottom: the distance computation is not under test here."""
-    skeleton = _read(skeleton_file)
-    _write_volume(distbottom_file, np.where(skeleton == 0, OUTSIDE_SKELETON, skeleton).astype(np.int16))
-
-
-@pytest.fixture
-def distbottom(monkeypatch, tmp_path):
-    """Runs the real generate_distbottom_crops on tmp_path/crops, as run_with_params does."""
-    monkeypatch.setattr(gd, "generate_distbottom", _write_distbottom)
-    crop_dir = str(tmp_path / "crops")
-
-    def run(**kwargs):
-        gd.generate_distbottom_crops(src_dir=crop_dir, crop_dir=crop_dir, side=SIDE, **kwargs)
-
-    return run
-
-
-def _cropped_distbottom(root, subject):
-    return Path(root) / "crops" / f"{SIDE}distbottom" / f"{subject}_cropped_distbottom.nii.gz"
-
-
-def _distbottom_subjects(root):
-    """Subjects of <side>distbottom_subject.csv, after checking <side>distbottom.npy has one row per subject."""
-    crops = Path(root) / "crops"
-    subjects = pd.read_csv(crops / f"{SIDE}distbottom_subject.csv", dtype=str)["Subject"].tolist()
-    assert np.load(crops / f"{SIDE}distbottom.npy").shape[0] == len(subjects)
-    return subjects
-
-
-@pytest.mark.parametrize("cause", REMOVAL_CAUSES)
-def test_distbottom_leaves_qc_removed_subject_out_of_the_stack(tmp_path, distbottom, cause):
-    """REQ-CTFAIL-BDRABCZUK-613F12316DE7: b2 is out of the array and CSV of the distbottom stack, though its cropped
-    skeleton, the source of that step, stays on disk."""
-    out = _subject_set_layout(tmp_path, skeleton=("a1", "b2", "c3"))
-    _crop_with_qc(tmp_path, out, "skeleton")
-    qc_path = _qc_file(tmp_path, {"a1": QC_KEPT, "b2": cause, "c3": QC_KEPT})
-
-    _crop_with_qc(tmp_path, out, "skeleton", qc_path=qc_path)
-    distbottom(qc_path=qc_path)
-
-    assert _distbottom_subjects(tmp_path) == ["a1", "c3"]
-
-
-@pytest.mark.parametrize("skeleton_crop_left", [True, False], ids=["skeleton_crop_left", "skeleton_crop_gone"])
-def test_distbottom_file_of_earlier_run_is_not_stacked(tmp_path, distbottom, skeleton_crop_left):
-    """REQ-CTFAIL-BDRABCZUK-6E7E390BC3B4: the distbottom file an earlier run left for b2 is not stacked, also once only
-    the distbottom folder still names the subject."""
-    out = _subject_set_layout(tmp_path, skeleton=("a1", "b2"))
-    _crop_with_qc(tmp_path, out, "skeleton")
-    distbottom()
-    if not skeleton_crop_left:
-        _resampled(out, "skeleton", "b2").unlink()
-        _cropped(tmp_path, "skeleton", "b2").unlink()
-    qc_path = _qc_file(tmp_path, {"a1": QC_KEPT, "b2": QC_ZERO})
-
-    _crop_with_qc(tmp_path, out, "skeleton", qc_path=qc_path)
-    distbottom(qc_path=qc_path)
-
-    assert _cropped_distbottom(tmp_path, "b2").exists()
-    assert _distbottom_subjects(tmp_path) == ["a1"]
-
-
-@pytest.mark.parametrize("distbottom_left", [True, False], ids=["distbottom_left", "no_distbottom"])
-@pytest.mark.parametrize("resampled_left", [True, False], ids=["resampled_left", "resampled_gone"])
-def test_distbottom_stack_stays_aligned_with_the_skeleton_stack(tmp_path, distbottom, resampled_left, distbottom_left):
-    """REQ-CTFAIL-BDRABCZUK-F67061A1575D: the design probe. The cropped skeleton of b2 is left over: the step used to
-    stop on the shapes, quality_checks here stays on and both stacks hold a1 and c3, in the same order."""
-    out = _subject_set_layout(tmp_path, skeleton=("a1", "b2", "c3"))
-    _crop_with_qc(tmp_path, out, "skeleton")
-    if distbottom_left:
-        distbottom()
-    if not resampled_left:
-        _resampled(out, "skeleton", "b2").unlink()
-    qc_path = _qc_file(tmp_path, {"a1": QC_KEPT, "b2": QC_ZERO, "c3": QC_KEPT})
-
-    _crop_with_qc(tmp_path, out, "skeleton", qc_path=qc_path)
-    distbottom(qc_path=qc_path)
-
-    assert _cropped(tmp_path, "skeleton", "b2").exists()
-    assert _stacked_subjects(tmp_path, "skeleton") == ["a1", "c3"]
-    assert _distbottom_subjects(tmp_path) == _stacked_subjects(tmp_path, "skeleton")
-
-
-def test_run_with_params_passes_skel_qc_path_to_distbottom(tmp_path, regions_json, calls):  # noqa: F811
-    """REQ-CTFAIL-BDRABCZUK-A2CC6CE5348E: the distbottom step of a region receives the QC file of --sk_qc_path."""
-    params = _params(tmp_path, regions_json, skel_qc_path="/data/qc.tsv", skip_distbottom=False)
-
-    gosr.run_with_params(params)
-
-    assert [kwargs.get("qc_path") for kwargs in _called(calls, "generate_distbottom_crops")] == ["/data/qc.tsv"]
-
-
 KEPT_BIDS_KEYS = ("sub-1", "sub-1_ses-1", "sub-2_ses-1_run-1", "sub-2_ses-1_acq-hr_run-2", "sub-4_ses-1")
 REMOVED_BIDS_KEYS = ("sub-3_ses-1", "sub-5_ses-1")
 # Folder names, except sub-4_ses-1; the keys above are file names.
 QC_OF_BIDS_KEYS = {"sub-1": QC_KEPT, "sub-2": QC_KEPT, "sub-3": QC_ZERO, "sub-4_ses-1": QC_KEPT}
 
 
-@pytest.mark.parametrize(
-    "stacked_by",
-    [lambda root: _stacked_subjects(root, "skeleton"), _distbottom_subjects],
-    ids=["generate_crops", "generate_distbottom_crops"],
-)
-def test_bids_key_passes_qc_by_its_subject_form(tmp_path, monkeypatch, distbottom, stacked_by):
+def test_bids_key_passes_qc_by_its_subject_form(tmp_path, monkeypatch):
     """REQ-CTFAIL-BDRABCZUK-87634A604945: the probe of the design report. QC lists folder names, so sub-1_ses-1 passes
     by sub-1; sub-4_ses-1 passes by itself, as a folder really named so; sub-3_ses-1 (a qc of 0) and sub-5_ses-1 (no
     row) pass by neither form."""
@@ -505,6 +396,5 @@ def test_bids_key_passes_qc_by_its_subject_form(tmp_path, monkeypatch, distbotto
     qc_path = _qc_file(tmp_path, QC_OF_BIDS_KEYS)
 
     _crop_with_qc(tmp_path, out, "skeleton", qc_path=qc_path)
-    distbottom(qc_path=qc_path)
 
-    assert sorted(stacked_by(tmp_path)) == sorted(KEPT_BIDS_KEYS)
+    assert sorted(_stacked_subjects(tmp_path, "skeleton")) == sorted(KEPT_BIDS_KEYS)

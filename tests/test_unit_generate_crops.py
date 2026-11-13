@@ -886,7 +886,7 @@ def test_empty_crop_leaves_subject_out_of_the_later_stacks(tmp_path, input_type)
 
 
 def test_empty_crop_deletes_the_cropped_file(tmp_path):
-    """REQ-CTFAIL-BDRABCZUK-86FBC52CFA55: generate_distbottom_crops stacks the subjects found among these files."""
+    """REQ-CTFAIL-BDRABCZUK-86FBC52CFA55: the crop stacking step stacks the subjects found among these files."""
     out = _empty_crop_layout(tmp_path)
 
     _crop(tmp_path, out, "skeleton")

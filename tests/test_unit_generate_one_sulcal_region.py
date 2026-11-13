@@ -37,7 +37,6 @@ STEP_FUNCTIONS = [
     "mask_foldlabel_files",
     "mask_extremities_files",
     "generate_crops",
-    "generate_distbottom_crops",
 ]
 
 CROP_SUBDIR = {"skeleton": "crops", "foldlabel": "labels", "distmap": "distmaps", "extremities": "extremitiess"}
@@ -269,9 +268,6 @@ def test_run_with_params_computes_only_missing_masks(tmp_path, regions_json, cal
     mask_side_dir = os.path.join(params["supervised_output_dir"], "mask", "canonical_25", "2mm", "R")
     os.makedirs(mask_side_dir)
     open(os.path.join(mask_side_dir, "S.Or._right.nii.gz"), "w").close()
-    if save_behavior == "clear_and_compute":
-        # Pre-create the distbottom dir so the REQ-CTILESTEST-40 defect does not interrupt the run.
-        os.makedirs(os.path.join(params["output_dir"], "crops", "canonical_25", "2mm", REGION, "mask", "Rdistbottom"))
 
     gosr.run_with_params(params)
 
@@ -280,25 +276,6 @@ def test_run_with_params_computes_only_missing_masks(tmp_path, regions_json, cal
     assert masks[0]["mask_dir"] == os.path.join(params["supervised_output_dir"], "mask", "canonical_25", "2mm")
     assert masks[0]["side"] == "R"
     assert os.path.isfile(os.path.join(mask_side_dir, "S.Or._right.nii.gz"))
-
-
-# --- REQ-CTILESTEST-37: distbottom crops ------------------------------------------------------------
-
-
-@pytest.mark.parametrize("skip", [False, True])
-def test_run_with_params_distbottom_follows_skip_flag(tmp_path, regions_json, calls, skip):
-    """REQ-CTILESTEST-37: distbottom crops use generate_crops' crop_dir as src and target, unless skip_distbottom."""
-    gosr.run_with_params(_params(tmp_path, regions_json, skip_distbottom=skip))
-
-    (crops,) = _called(calls, "generate_crops")
-    distbottom = _called(calls, "generate_distbottom_crops")
-    if skip:
-        assert distbottom == []
-    else:
-        assert len(distbottom) == 1
-        assert distbottom[0]["src_dir"] == crops["crop_dir"]
-        assert distbottom[0]["crop_dir"] == crops["crop_dir"]
-        assert distbottom[0]["side"] == "R"
 
 
 # --- REQ-CTILESTEST-38: foldlabel masking -----------------------------------------------------------
@@ -345,18 +322,6 @@ def test_run_with_params_writes_params_json_next_to_crops(tmp_path, regions_json
     assert dumped["input_type"] == input_type
     assert dumped["region_name"] == REGION
     assert dumped["crops_dir"] == os.path.join(params["output_dir"], "crops", "canonical_25")
-
-
-# --- REQ-CTILESTEST-40: clear_and_compute and the distbottom directory ------------------------------
-
-
-def test_run_with_params_clear_and_compute_without_distbottom_dir_computes_distbottom(tmp_path, regions_json, calls):
-    """REQ-CTDEFECTS-02 (inverts REQ-CTILESTEST-40): clear_and_compute + no <crop_dir>/Rdistbottom -> distbottom computed."""
-    gosr.run_with_params(_params(tmp_path, regions_json, save_behavior="clear_and_compute"))
-
-    names = [name for name, _ in calls]
-    assert "generate_crops" in names
-    assert "generate_distbottom_crops" in names
 
 
 # --- REQ-CTFAIL-BDRABCZUK-7062EA551CE0: one shared per-side skip list ------------------------------
@@ -471,9 +436,7 @@ def test_count_check_raises_when_only_skip_listed_subjects_have_both(tmp_path, s
 def test_count_check_warns_once_per_one_sided_subject(tmp_path, caplog):
     """REQ-CTFAIL-BDRABCZUK-8124960D2098: one record per subject, naming the missing input type only."""
     caplog.set_level(logging.WARNING)
-    resampled_dir, skeleton_dir = _write_resampled(
-        str(tmp_path), "R", ["sub-1", "sub-2", "sub-3"], ["sub-1", "sub-4"]
-    )
+    resampled_dir, skeleton_dir = _write_resampled(str(tmp_path), "R", ["sub-1", "sub-2", "sub-3"], ["sub-1", "sub-4"])
 
     COUNT_CHECK(resampled_dir, skeleton_dir, "R", str(tmp_path))
 
@@ -564,9 +527,7 @@ def test_count_check_matches_skip_listed_subject_exactly(tmp_path, caplog):
 
 def test_count_check_error_states_both_numbers(tmp_path):
     """REQ-CTFAIL-BDRABCZUK-1A9EA2403DB5: the numbers compared, skip-listed subjects left out."""
-    resampled_dir, skeleton_dir = _write_resampled(
-        str(tmp_path), "R", ["sub-1", "sub-2", "sub-3", "sub-4"], ["sub-1"]
-    )
+    resampled_dir, skeleton_dir = _write_resampled(str(tmp_path), "R", ["sub-1", "sub-2", "sub-3", "sub-4"], ["sub-1"])
     _skip(str(tmp_path), "R", ["sub-1"])
 
     raised = _no_valid_subject_error(resampled_dir, skeleton_dir, "R", str(tmp_path))
@@ -588,9 +549,7 @@ def test_count_check_error_names_skip_list_path(tmp_path, side):
 
 
 @pytest.mark.parametrize("side", ["R", "L"])
-def test_run_with_params_calls_count_check_between_resample_and_mask(
-    tmp_path, regions_json, calls, monkeypatch, side
-):
+def test_run_with_params_calls_count_check_between_resample_and_mask(tmp_path, regions_json, calls, monkeypatch, side):
     """REQ-CTFAIL-BDRABCZUK-F134A975CFB1: the check sees foldlabels/<vs>, skeletons/<vs>, the side and output_dir."""
     _spy_count_check(monkeypatch, calls)
     params = _params(tmp_path, regions_json, input_type="foldlabel", side=side)
