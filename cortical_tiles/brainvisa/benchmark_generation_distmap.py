@@ -131,7 +131,10 @@ class Benchmark():
                 self.graph)
             voxel_size_in = self.graph['voxel_size'][:3]
 
-            for v in self.graph.vertices():
+            # aims keeps the vertices in a set ordered by memory address: sort
+            # by vertex index so that the surface numbering (and the surface
+            # deleted by delete_ss) does not depend on the allocation history
+            for v in sorted(self.graph.vertices(), key=lambda x: x['index']):
                 if 'label' in v:
                     bck_map = v['aims_ss']
                     # Creation of a volume in ICBM space where to write voxels
@@ -177,8 +180,9 @@ class Benchmark():
             sub: int giving the subject
         """
         # Suppression of one random simple surface (satisfying both criteria)
-        random.seed(56)  # benchmark 1 : random seed = 42
-        surface = random.randint(0, len(self.surfaces) - 1)
+        # Local generator: the global random state is left untouched
+        rng = random.Random(56)  # benchmark 1 : random seed = 42
+        surface = rng.randint(0, len(self.surfaces) - 1)
 
         bck_map = self.surfaces[surface]['aims_ss']
         for voxel in bck_map[0].keys():
