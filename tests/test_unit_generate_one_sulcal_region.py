@@ -222,15 +222,124 @@ def test_run_with_params_skeleton_crop_paths(tmp_path, regions_json, calls, out_
     assert crops["input_type"] == "skeleton"
 
 
-def test_run_with_params_masks_version_defaults_to_canonical_25(tmp_path, regions_json, calls):
-    """REQ-CTILESTEST-33: without a masks_version key, 'canonical_25' is used for masks and crops."""
+DEFAULT_MASKS_VERSION = "canonical_corrected_26_1"
+
+
+def _write_masks(params, version, vs, sulci):
+    """Creates empty <supervised_output_dir>/mask/<version>/<vs>/<side>/<sulcus><_right|_left>.nii.gz files."""
+    full_side = "_right" if params["side"] == "R" else "_left"
+    side_dir = os.path.join(params["supervised_output_dir"], "mask", version, vs, params["side"])
+    os.makedirs(side_dir, exist_ok=True)
+    for sulcus in sulci:
+        with open(os.path.join(side_dir, sulcus + full_side + ".nii.gz"), "w"):
+            pass
+
+
+def test_run_with_params_masks_version_defaults_to_canonical_corrected_26_1(tmp_path, regions_json, calls):
+    """REQ-CTILESTEST-BDRABCZUK-167DAC132B76 (supersedes REQ-CTILESTEST-33), REQ-MODELVER-BDRABCZUK-B41064770DA6:
+    without a masks_version key, 'canonical_corrected_26_1' is used for masks and crops. The region masks exist
+    in that version (REQ-MODELVER-BDRABCZUK-7D7A8D980F22 refuses a default run whose mask is absent), so the
+    existing masks are read and none is computed."""
     params = _params(tmp_path, regions_json)
     del params["masks_version"]
+    _write_masks(params, DEFAULT_MASKS_VERSION, "2mm", SULCI)
     gosr.run_with_params(params)
 
+    masks_dir = os.path.join(params["supervised_output_dir"], "mask", DEFAULT_MASKS_VERSION)
+    assert _called(calls, "compute_mask") == []
     (crops,) = _called(calls, "generate_crops")
-    assert crops["crop_dir"] == os.path.join(params["output_dir"], "crops", "canonical_25", "2mm", REGION, "mask")
-    assert crops["mask_dir"].startswith(os.path.join(params["supervised_output_dir"], "mask", "canonical_25"))
+    out = params["output_dir"]
+    assert crops["crop_dir"] == os.path.join(out, "crops", DEFAULT_MASKS_VERSION, "2mm", REGION, "mask")
+    assert crops["mask_dir"] == os.path.join(masks_dir, "2mm")
+    assert params["crops_dir"] == os.path.join(out, "crops", DEFAULT_MASKS_VERSION)
+
+
+def test_crop_region_dir_masks_version_defaults_to_canonical_corrected_26_1(tmp_path, regions_json):
+    """REQ-MODELVER-BDRABCZUK-062D95D69622, REQ-MODELVER-BDRABCZUK-B41064770DA6: without a masks_version key,
+    crop_region_dir returns a path under <output_dir>/crops/canonical_corrected_26_1."""
+    params = _params(tmp_path, regions_json)
+    del params["masks_version"]
+
+    path = gosr.crop_region_dir(params, REGION)
+
+    assert path == os.path.join(params["output_dir"], "crops", DEFAULT_MASKS_VERSION, "2mm", REGION, "mask")
+
+
+# --- REQ-MODELVER-BDRABCZUK-7D7A8D980F22: a default run refuses an absent canonical_corrected_26_1 mask ---------
+
+
+def _files_under(root):
+    """Every file path under root (empty when root does not exist)."""
+    return sorted(os.path.join(d, f) for d, _, files in os.walk(root) for f in files)
+
+
+def test_run_with_params_default_masks_version_absent_masks_raises_value_error(tmp_path, regions_json, calls):
+    """REQ-MODELVER-BDRABCZUK-7D7A8D980F22: no masks_version key and no region mask under
+    mask/canonical_corrected_26_1 -> ValueError naming the version and each absent mask, before any file is written."""
+    params = _params(tmp_path, regions_json)
+    del params["masks_version"]
+
+    with pytest.raises(ValueError) as excinfo:
+        gosr.run_with_params(params)
+
+    message = str(excinfo.value)
+    assert DEFAULT_MASKS_VERSION in message
+    for sulcus in SULCI:
+        assert sulcus + "_right" in message
+    assert calls == []
+    assert _files_under(str(tmp_path / "supervised")) == []
+    assert not os.path.exists(params["output_dir"])
+
+
+def test_run_with_params_default_masks_version_one_absent_mask_raises_value_error(tmp_path, regions_json, calls):
+    """REQ-MODELVER-BDRABCZUK-7D7A8D980F22: one region sulcus mask present, one absent -> ValueError naming the
+    absent one; no mask is computed and no file is written."""
+    params = _params(tmp_path, regions_json)
+    del params["masks_version"]
+    present, absent = SULCI
+    _write_masks(params, DEFAULT_MASKS_VERSION, "2mm", [present])
+    files_before = _files_under(params["supervised_output_dir"])
+
+    with pytest.raises(ValueError) as excinfo:
+        gosr.run_with_params(params)
+
+    message = str(excinfo.value)
+    assert DEFAULT_MASKS_VERSION in message
+    assert absent + "_right" in message
+    assert calls == []
+    assert _files_under(params["supervised_output_dir"]) == files_before
+    assert not os.path.exists(params["output_dir"])
+
+
+def test_run_with_params_default_masks_version_1mm_run_raises_value_error(tmp_path, regions_json, calls):
+    """REQ-MODELVER-BDRABCZUK-7D7A8D980F22: canonical_corrected_26_1 ships 2mm masks only; a default 1mm run whose
+    masks exist only at 2mm -> ValueError naming the version and each absent 1mm mask, nothing written."""
+    params = _params(tmp_path, regions_json, out_voxel_size=1.0)
+    del params["masks_version"]
+    _write_masks(params, DEFAULT_MASKS_VERSION, "2mm", SULCI)
+    files_before = _files_under(params["supervised_output_dir"])
+
+    with pytest.raises(ValueError) as excinfo:
+        gosr.run_with_params(params)
+
+    message = str(excinfo.value)
+    assert DEFAULT_MASKS_VERSION in message
+    for sulcus in SULCI:
+        assert sulcus + "_right" in message
+    assert calls == []
+    assert _files_under(params["supervised_output_dir"]) == files_before
+    assert not os.path.exists(params["output_dir"])
+
+
+def test_run_with_params_explicit_masks_version_absent_masks_computes_them(tmp_path, regions_json, calls):
+    """REQ-MODELVER-BDRABCZUK-7D7A8D980F22 (scope), REQ-CTILESTEST-BDRABCZUK-22E2CA307B08: an explicit masks_version,
+    even 'canonical_corrected_26_1', keeps computing each absent region mask; no ValueError."""
+    params = _params(tmp_path, regions_json, masks_version=DEFAULT_MASKS_VERSION)
+
+    gosr.run_with_params(params)
+
+    masks_dir = os.path.join(params["supervised_output_dir"], "mask", DEFAULT_MASKS_VERSION, "2mm")
+    assert [(m["sulcus"], m["mask_dir"]) for m in _called(calls, "compute_mask")] == [(s, masks_dir) for s in SULCI]
 
 
 # --- REQ-CTILESTEST-34 / 35: out_voxel_size 'raw' ---------------------------------------------------
