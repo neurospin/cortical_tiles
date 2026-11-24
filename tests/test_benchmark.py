@@ -91,3 +91,41 @@ def test_suppr_benchmark(tmp_path):
     tgt_csv = os.path.join(tgt_dir, "abnormality_test.csv")
     equal_csv = equal_csv_files(tgt_csv, ref_csv)
     assert equal_csv
+
+
+def _simple_surface_indexes(tmp_path, n_prior_allocations):
+    """Vertex indexes of Benchmark.surfaces, in key order, after some allocations.
+
+    aims keeps the graph vertices in a set ordered by memory address, so the
+    iteration order depends on the allocation history of the process.
+    """
+    held = [aims.Volume([10 + i, 10, 10], dtype="S16") for i in range(n_prior_allocations)]
+    benchmark = Benchmark(
+        1, "R", 200, ["S.C._right"], data_dir=src_dir, saving_dir=str(tmp_path), bbox_dir=bbox_dir, mask_dir=mask_dir
+    )
+    benchmark.get_simple_surfaces("100206")
+    assert held is not None
+    return [benchmark.surfaces[key]["index"] for key in sorted(benchmark.surfaces)]
+
+
+def test_simple_surfaces_follow_vertex_index_order(tmp_path):
+    """The int keys of Benchmark.surfaces do not depend on heap addresses"""
+    for n_prior_allocations in (0, 3, 17):
+        indexes = _simple_surface_indexes(tmp_path, n_prior_allocations)
+        assert len(indexes) > 1
+        assert indexes == sorted(indexes)
+
+
+def test_delete_ss_leaves_global_random_state(tmp_path):
+    """Picking the simple surface to delete does not reseed the global random module"""
+    import random
+
+    benchmark = Benchmark(
+        1, "R", 200, ["S.C._right"], data_dir=src_dir, saving_dir=str(tmp_path), bbox_dir=bbox_dir, mask_dir=mask_dir
+    )
+    benchmark.get_simple_surfaces("100206")
+    benchmark.generate_skeleton("100206")
+    random.seed(1234)
+    state = random.getstate()
+    benchmark.delete_ss("100206")
+    assert random.getstate() == state

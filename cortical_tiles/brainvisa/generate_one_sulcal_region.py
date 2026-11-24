@@ -76,6 +76,10 @@ log = set_file_logger(__file__)
 # a fixed seed makes 2mm re-skeletonization (and so every crop) reproducible.
 DEFAULT_SKEL_SEED = 42
 
+# Mask version used when the params dict has no "masks_version" key
+# (direct cortical_tiles runs; the pipeline always passes it).
+DEFAULT_MASKS_VERSION = "canonical_corrected_26_1"
+
 
 # get all the sulci of a given brain region
 def get_sulci_list(
@@ -257,10 +261,21 @@ def crop_region_dir(params, region):
     return os.path.join(
         params['output_dir'],
         'crops',
-        params.get('masks_version', 'canonical_25'),
+        params.get('masks_version', DEFAULT_MASKS_VERSION),
         voxel_size_name(params['out_voxel_size']),
         region,
         'no_mask' if params['no_mask'] else 'mask')
+
+
+def absent_masks(masks_dir, vox_size, side, sulci_list):
+    """Returns the <vox_size>/<side>/<sulcus><_right|_left>.nii.gz paths,
+    relative to masks_dir, of the sulci whose mask file does not exist,
+    in sulci_list order"""
+    full_side = '_right' if side == 'R' else '_left'
+    relative = [os.path.join(vox_size, side, sulcus + full_side + '.nii.gz')
+                for sulcus in sulci_list]
+    return [path for path in relative
+            if not os.path.exists(os.path.join(masks_dir, path))]
 
 
 def run_with_params(params: dict):
@@ -308,7 +323,7 @@ def run_with_params(params: dict):
     log.info(sulci_list)
 
     # Generates supervised output paths
-    masks_version = params.get("masks_version", "canonical_25")
+    masks_version = params.get("masks_version", DEFAULT_MASKS_VERSION)
     params['masks_dir'] = os.path.join(
         params["supervised_output_dir"], "mask", masks_version)
     params['bbox_dir'] = os.path.join(params["supervised_output_dir"], "bbox")
@@ -319,6 +334,19 @@ def run_with_params(params: dict):
     params['foldlabel_dir'] = os.path.join(params["output_dir"], "foldlabels")
     params['transform_dir'] = os.path.join(params["output_dir"], "transforms")
     params['crops_dir'] = os.path.join(params["output_dir"], "crops", masks_version)
+
+    # A default run never computes masks into the hand-corrected default
+    # version: it refuses before any file is written. An explicit
+    # masks_version keeps computing its absent masks (step 1 below).
+    if "masks_version" not in params:
+        absent = absent_masks(params['masks_dir'], vox_size,
+                              params['side'], sulci_list)
+        if absent:
+            raise ValueError(
+                "No masks_version given and the default Mask version "
+                f"{DEFAULT_MASKS_VERSION} has no mask for "
+                f"{', '.join(absent)} under {params['masks_dir']}. "
+                "Pass masks_version explicitly to compute absent masks.")
 
     ##########################################################
     # generate masks
