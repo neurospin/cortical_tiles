@@ -36,3 +36,5 @@ venv
 .omc/
 .omc/*
 .codegraph/
+# ALM ledger (.alm/, its own local repo)
+.alm/
