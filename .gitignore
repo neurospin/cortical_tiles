@@ -38,3 +38,4 @@ venv
 .codegraph/
 # ALM ledger (.alm/, its own local repo)
 .alm/
+.alm
