@@ -41,18 +41,16 @@ Bounding box corresponds to the biggest box that encompasses the given sulci
 on all subjects of the manually labelled dataset. It measures the bounding box
 in the MNI152  space.
 """
-import argparse
-import glob
 import sys
 from os.path import basename
 from os.path import join
 
 import numpy as np
 from cortical_tiles.brainvisa import exception_handler
+from cortical_tiles.brainvisa import subject_cli
 from cortical_tiles.brainvisa.utils.bbox import compute_max
 from cortical_tiles.brainvisa.utils.folder import create_folder
 from cortical_tiles.brainvisa.utils.logs import LogJson
-from cortical_tiles.brainvisa.utils.logs import setup_log
 from cortical_tiles.brainvisa.utils.referentials import \
     ICBM2009c_to_aims_talairach
 from cortical_tiles.brainvisa.utils.subjects import get_number_subjects
@@ -60,7 +58,6 @@ from cortical_tiles.brainvisa.utils.subjects import \
     select_subjects_int_if_list_of_dict
 from cortical_tiles.brainvisa.utils.subjects import \
     get_all_subjects_as_dictionary
-from cortical_tiles.brainvisa.utils.sulcus import complete_sulci_name
 from cortical_tiles.config.logs import set_file_logger
 from soma import aims
 
@@ -68,7 +65,7 @@ from soma import aims
 from cortical_tiles.brainvisa.utils.constants import \
     _ALL_SUBJECTS, _SUPERVISED_SRC_DIR_DEFAULT,\
     _BBOX_DIR_DEFAULT, _SIDE_DEFAULT, _SULCUS_DEFAULT,\
-    _VOXEL_SIZE_DEFAULT, _PATH_TO_GRAPH_SUPERVISED_DEFAULT
+    _PATH_TO_GRAPH_SUPERVISED_DEFAULT
 
 # Defines logger
 log = set_file_logger(__file__)
@@ -171,18 +168,8 @@ def get_bounding_boxes(subjects, sulcus):
     list_bbmin = []
     list_bbmax = []
 
-    for sub in subjects:
-        log.info(sub)
-        graph_file = sub['graph_file'] % sub
-        # It looks for a graph file .arg
-        list_graph_file = sorted(glob.glob(join(sub['dir'], graph_file)))
-        if len(list_graph_file) == 0:
-            raise RuntimeError(f"No graph file! "
-                               f"{sub['dir']} doesn't contain {graph_file}")
-        sulci_pattern = list_graph_file[0]
-
-        bbox_min, bbox_max = \
-            get_one_bounding_box(sulci_pattern % sub, sulcus)
+    for sub, graph_path in subject_cli.iter_subject_graphs(subjects, log):
+        bbox_min, bbox_max = get_one_bounding_box(graph_path, sulcus)
         if bbox_min is not None:
             list_bbmin.append([bbox_min[0], bbox_min[1], bbox_min[2]])
             list_bbmax.append([bbox_max[0], bbox_max[1], bbox_max[2]])
@@ -228,20 +215,15 @@ def compute_box_voxel(bbmin_mni152, bbmax_mni152, voxel_size_out):
     return bbmin_vox, bbmax_vox
 
 
-class BoundingBoxMax:
+class BoundingBoxMax(subject_cli.SulcusOverSubjects):
     """Determines the maximum Bounding Box around given sulci
 
     It is determined in the  MNI ICBM152 nonlinear 2009c asymmetrical template
     http://www.bic.mni.mcgill.ca/~vfonov/icbm/2009/mni_icbm152_nlin_asym_09b_nifti.zip
     """
 
-    def __init__(self,
-                 src_dir=_SUPERVISED_SRC_DIR_DEFAULT,
-                 path_to_graph=_PATH_TO_GRAPH_SUPERVISED_DEFAULT,
-                 bbox_dir=_BBOX_DIR_DEFAULT,
-                 sulcus=_SULCUS_DEFAULT,
-                 new_sulcus=None,
-                 side=_SIDE_DEFAULT,
+    def __init__(self, src_dir=_SUPERVISED_SRC_DIR_DEFAULT, path_to_graph=_PATH_TO_GRAPH_SUPERVISED_DEFAULT,
+                 bbox_dir=_BBOX_DIR_DEFAULT, sulcus=_SULCUS_DEFAULT, new_sulcus=None, side=_SIDE_DEFAULT,
                  out_voxel_size=None):
         """Inits with list of directories and list of sulci
 
@@ -255,25 +237,8 @@ class BoundingBoxMax:
             out_voxel_size: float for voxel size in mm
         """
 
-        # Transforms input source dir to a list of strings
-        self.src_dir = [src_dir] if isinstance(src_dir, str) else src_dir
-
-        # manually labelled graph file relative to the subject directory
-        # we use the '*' glob to take into account different naming conventions
-        # It must be put in the same order as src_dir
-        path_to_graph = ([path_to_graph] if isinstance(path_to_graph, str)
-                         else path_to_graph)
-        self.graph_file = []
-        for path in path_to_graph:
-            self.graph_file.append('%(subject)s/'
-                                   + path
-                                   + '/%(side)s%(subject)s*.arg')
-
-        self.new_sulcus = new_sulcus if new_sulcus else sulcus
+        super().__init__(src_dir, path_to_graph, sulcus, new_sulcus, side)
         self.bbox_dir = bbox_dir
-        self.side = side
-        self.sulcus = complete_sulci_name(sulcus, side)
-        self.new_sulcus = complete_sulci_name(self.new_sulcus, side)
         self.voxel_size_out = (out_voxel_size,
                                out_voxel_size,
                                out_voxel_size)
@@ -354,14 +319,9 @@ class BoundingBoxMax:
         return bbmin_vox, bbmax_vox
 
 
-def compute_bounding_box(src_dir=_SUPERVISED_SRC_DIR_DEFAULT,
-                         bbox_dir=_BBOX_DIR_DEFAULT,
-                         path_to_graph=_PATH_TO_GRAPH_SUPERVISED_DEFAULT,
-                         sulcus=_SULCUS_DEFAULT,
-                         new_sulcus=None,
-                         side=_SIDE_DEFAULT,
-                         number_subjects=_ALL_SUBJECTS,
-                         out_voxel_size=None):
+def compute_bounding_box(src_dir=_SUPERVISED_SRC_DIR_DEFAULT, bbox_dir=_BBOX_DIR_DEFAULT,
+                         path_to_graph=_PATH_TO_GRAPH_SUPERVISED_DEFAULT, sulcus=_SULCUS_DEFAULT, new_sulcus=None,
+                         side=_SIDE_DEFAULT, number_subjects=_ALL_SUBJECTS, out_voxel_size=None):
     """ Main program computing the box encompassing the sulcus in all subjects
 
     The programm loops over all subjects
@@ -383,17 +343,21 @@ def compute_bounding_box(src_dir=_SUPERVISED_SRC_DIR_DEFAULT,
         tuple (bbmin_vox, bbmax_vox)
     """
 
-    box = BoundingBoxMax(src_dir=src_dir,
-                         bbox_dir=bbox_dir,
-                         path_to_graph=path_to_graph,
-                         sulcus=sulcus,
-                         new_sulcus=new_sulcus,
-                         side=side,
-                         out_voxel_size=out_voxel_size)
+    box = BoundingBoxMax(src_dir=src_dir, bbox_dir=bbox_dir, path_to_graph=path_to_graph, sulcus=sulcus,
+                         new_sulcus=new_sulcus, side=side, out_voxel_size=out_voxel_size)
     bbmin_vox, bbmax_vox = box.compute(
         number_subjects=number_subjects)
 
     return bbmin_vox, bbmax_vox
+
+
+# Command-line texts of this script
+_CLI = subject_cli.ScriptCli(
+    prog=basename(__file__), description='Computes bounding box around the named sulcus', output_key='bbox_dir',
+    output_default=_BBOX_DIR_DEFAULT,
+    output_help='Output directory where to store the output bbox json files. Default is : ' + _BBOX_DIR_DEFAULT,
+    sulcus_help='Sulcus name around which we determine the bounding box. Default is : ' + _SULCUS_DEFAULT,
+    voxel_size_help='Voxel size of bounding box. Default is : None')
 
 
 def parse_args(argv: list) -> dict:
@@ -406,77 +370,7 @@ def parse_args(argv: list) -> dict:
         params: a dictionary with all arugments as keys
     """
 
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(
-        prog=basename(__file__),
-        description='Computes bounding box around the named sulcus')
-    parser.add_argument(
-        "-s", "--src_dir", type=str, default=_SUPERVISED_SRC_DIR_DEFAULT,
-        nargs='+',
-        help='Source directory where the MRI data lies. '
-             'If there are several directories, add all directories '
-             'one after the other. Example: -s DIR_1 DIR_2. '
-             'Default is : ' + _SUPERVISED_SRC_DIR_DEFAULT)
-    parser.add_argument(
-        "-o", "--output_dir", type=str, default=_BBOX_DIR_DEFAULT,
-        help='Output directory where to store the output bbox json files. '
-             'Default is : ' + _BBOX_DIR_DEFAULT)
-    parser.add_argument(
-        "-u", "--sulcus", type=str, default=_SULCUS_DEFAULT,
-        help='Sulcus name around which we determine the bounding box. '
-             'Default is : ' + _SULCUS_DEFAULT)
-    parser.add_argument(
-        "-w", "--new_sulcus", type=str, default=None,
-        help='Sulcus name around which we determine the bounding box. '
-             'Default is : None (same name as \'sulcus\')')
-    parser.add_argument(
-        "-i", "--side", type=str, default=_SIDE_DEFAULT,
-        help='Hemisphere side. Default is : ' + _SIDE_DEFAULT)
-    parser.add_argument(
-        "-p", "--path_to_graph", type=str,
-        default=_PATH_TO_GRAPH_SUPERVISED_DEFAULT,
-        help='Relative path to manually labelled graph. '
-             'Default is ' + _PATH_TO_GRAPH_SUPERVISED_DEFAULT)
-    parser.add_argument(
-        "-n", "--nb_subjects", type=str, default="all",
-        help='Number of subjects to take into account, or \'all\'. '
-             '0 subject is allowed, for debug purpose. '
-             'Default is : all')
-    parser.add_argument(
-        '-v', '--verbose', action='count', default=0,
-        help='Verbose mode: '
-             'If no option is provided then logging.INFO is selected. '
-             'If one option -v (or -vv) or more is provided '
-             'then logging.DEBUG is selected.')
-    parser.add_argument(
-        "-x", "--out_voxel_size", type=float, default=_VOXEL_SIZE_DEFAULT,
-        help='Voxel size of bounding box. '
-             'Default is : None')
-
-    params = {}
-
-    args = parser.parse_args(argv)
-
-    # Sets logger level, files log handler and prints/logs command line
-    new_sulcus = args.new_sulcus if args.new_sulcus else args.sulcus
-    setup_log(args,
-              log_dir=f"{args.output_dir}",
-              prog_name=basename(__file__),
-              suffix=complete_sulci_name(new_sulcus, args.side))
-
-    params['src_dir'] = args.src_dir  # src_dir is a list
-    params['path_to_graph'] = args.path_to_graph
-    # bbox_dir is a string, only one directory
-    params['bbox_dir'] = args.output_dir
-    params['sulcus'] = args.sulcus  # sulcus is a string
-    params['new_sulcus'] = args.new_sulcus
-    params['side'] = args.side
-    params['out_voxel_size'] = args.out_voxel_size
-
-    # Checks if nb_subjects is either the string "all" or a positive integer
-    params['nb_subjects'] = get_number_subjects(args.nb_subjects)
-
-    return params
+    return subject_cli.parse_subject_args(argv, _CLI)
 
 
 @exception_handler
