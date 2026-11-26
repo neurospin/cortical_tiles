@@ -149,3 +149,25 @@ def test_graph_subject_folders_are_sorted_property(names):
         result = module._graph_subject_folders(graphs_dir)
 
     assert result == sorted(result)
+
+
+@pytest.mark.parametrize("flag", ["--graph_label", "--graph-label"])
+def test_parse_args_graph_label_both_spellings(gsr, flag):
+    """Refactor of parse_args (TASK-ARGDISC-BDRABCZUK-720AB5FE3515): either spelling sets graph_label."""
+    params = gsr.parse_args(["-d", "D", "--path_sk_with_hull", "H", flag, "sul-0_auto"])
+
+    assert params["graph_label"] == "sul-0_auto"
+
+
+def test_parse_args_graph_label_default_none_and_help_is_the_subject_cli_text(gsr, capsys):
+    """Refactor of parse_args (TASK-ARGDISC-BDRABCZUK-720AB5FE3515): default None, help text from subject_cli."""
+    from cortical_tiles.brainvisa import subject_cli
+
+    params = gsr.parse_args(["-d", "D", "--path_sk_with_hull", "H"])
+    with pytest.raises(SystemExit):
+        gsr.parse_args(["--help"])
+    help_text = " ".join(capsys.readouterr().out.split())
+
+    assert params["graph_label"] is None
+    assert "--graph_label GRAPH_LABEL, --graph-label GRAPH_LABEL" in help_text
+    assert " ".join(subject_cli._GRAPH_LABEL_HELP.split()) in help_text
