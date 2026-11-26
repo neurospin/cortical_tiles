@@ -62,19 +62,26 @@ from cortical_tiles.brainvisa.utils.quality_checks import \
 from cortical_tiles.brainvisa.utils.resample import resample
 from cortical_tiles.brainvisa.generate_ICBM2009c_transforms import \
     get_transform_filename
+from cortical_tiles.brainvisa.subject_graphs import GraphSpec, \
+    labelling_sets, resolve_subject_graphs
 from cortical_tiles.config.logs import set_file_logger
 
 # Import constants
 from cortical_tiles.brainvisa.utils.constants import \
     _ALL_SUBJECTS, _SRC_DIR_DEFAULT, \
-    _SKELETON_DIR_DEFAULT, _SIDE_DEFAULT, \
-    _PATH_TO_GRAPH_DEFAULT
+    _SKELETON_DIR_DEFAULT, _SIDE_DEFAULT
 
 _OUTPUT_DIR_DEFAULT = join(_SKELETON_DIR_DEFAULT, "without_ventricle")
 _SRC_FILENAME_DEFAULT = "skeleton_generated_"
 _OUTPUT_FILENAME_DEFAULT = "skeleton_generated_without_ventricle_"
 _LABELLING_SESSION_DEFAULT = "deepcnn_session_auto"
 _GRAPH_WILDCARD = "*"  # the only wildcard read in path_to_graph
+_PATH_TO_GRAPH_HELP = (
+    "Relative path of the graph folder below each subject folder (fixed path "
+    "<subject>/<path_to_graph>/<labelling_session>/"
+    "<side><subject>_<labelling_session>.arg; in BIDS format the "
+    "session_acquisition_run folder is replaced by *). "
+    "Default: graph discovery below each subject folder.")
 
 # Defines logger
 log = set_file_logger(__file__)
@@ -207,12 +214,8 @@ def parse_args(argv):
              "as subdirectories. "
              f"Default is : {_SRC_DIR_DEFAULT}")
     parser.add_argument(
-        "-p", "--path_to_graph", type=str,
-        default=_PATH_TO_GRAPH_DEFAULT,
-        help="Relative path to graph. "
-        "In BIDS format, the session_acquisition_run directory "
-        "have to be replaced by *. "
-        f"Default is :  {_PATH_TO_GRAPH_DEFAULT}")
+        "-p", "--path_to_graph", type=str, default=None,
+        help=_PATH_TO_GRAPH_HELP)
     parser.add_argument(
         "-l", "--labelling_session",
         default=_LABELLING_SESSION_DEFAULT,
@@ -278,6 +281,28 @@ def _get_subject_id(subject):
     if subject.startswith("_"):
         return subject[1:]
     return subject
+
+
+def _find_labelled_graphs(subject_dir, spec, side_list):
+    """Returns, per side of side_list, the graph of the labelling set
+    spec.label that the graph resolver finds below subject_dir.
+    Raises FileNotFoundError for a side without such a graph: the
+    resolver's unlabelled fallback is never returned."""
+    assert len(side_list) >= 1, \
+        "VentricleRemoval._find_labelled_graphs pre: len(side_list) >= 1"
+    found = resolve_subject_graphs(subject_dir, spec)
+    result = []
+    for side in side_list:
+        graphs = found[side]
+        if not (graphs and labelling_sets(graphs) == [spec.label]):
+            raise FileNotFoundError(
+                f"Labelled graph not found : {spec.label} graph of side "
+                f"{side} below {subject_dir}")
+        result.append(graphs[0])
+    assert len(result) == len(side_list), \
+        "VentricleRemoval._find_labelled_graphs post: " \
+        "len(result) == len(side_list)"
+    return result
 
 
 class RemoveVentricleFromVolume:
@@ -388,16 +413,50 @@ class RemoveVentricleFromVolume:
 
     def get_labelled_graph(self, subject: str):
         """ Find the labelled graph in the morphologist database from the
-        source filename.
+        source filename: one .arg path per processed side, in side order.
+        Without path_to_graph, the labelled graphs graph discovery finds.
         """
+        subject = _get_subject_id(subject)
+        if self.path_to_graph is None:
+            result = self._discover_labelled_graphs(subject)
+        else:
+            result = self._fixed_labelled_graphs(subject)
+        assert len(result) >= 1, \
+            "VentricleRemoval.get_labelled_graph post: len(result) >= 1"
+        assert len(result) <= 2, \
+            "VentricleRemoval.get_labelled_graph post: len(result) <= 2"
+        return result
+
+    def _bids_subject_id(self, subject):
+        """Returns the subject id folder name of a BIDS session key."""
+        subject_id, separator, _ = subject.partition("_")
+        if not separator:
+            log.warning(f"The subject {subject} has no session, "
+                        "acquisition or run.")
+        return subject_id
+
+    def _discover_labelled_graphs(self, subject):
+        """Returns the labelled graph of each side found by graph discovery
+        below the subject folder (BIDS: of the subject's session key)."""
+        if self.bids:
+            subject_id = self._bids_subject_id(subject)
+            spec = GraphSpec(
+                label=self.labelling_session,
+                path_filter=lambda rel: session_key(
+                    subject_id, rel, True) == subject)
+        else:
+            subject_id = subject
+            spec = GraphSpec(label=self.labelling_session)
+        return _find_labelled_graphs(join(self.morpho_dir, subject_id), spec,
+                                     _get_side_list(self.side))
+
+    def _fixed_labelled_graphs(self, subject):
+        """Returns today's fixed labelled graph path of each side below
+        <morpho_dir>/<subject>/<path_to_graph>."""
         labelled_graph_list = []
         side_list = _get_side_list(self.side)
-        subject = _get_subject_id(subject)
         if self.bids:
-            subject_id, separator, _ = subject.partition("_")
-            if not separator:
-                log.warning(f"The subject {subject} has no session, "
-                            "acquisition or run.")
+            subject_id = self._bids_subject_id(subject)
             graph_dir = self._find_bids_graph_dir(subject, subject_id)
         for side in side_list:
             if self.bids:
@@ -471,7 +530,7 @@ class RemoveVentricleFromVolume:
 def remove_ventricle(src_dir=_SRC_DIR_DEFAULT,
                      output_dir=_OUTPUT_DIR_DEFAULT,
                      morpho_dir=_SRC_DIR_DEFAULT,
-                     path_to_graph=_PATH_TO_GRAPH_DEFAULT,
+                     path_to_graph=None,
                      labelling_session=_LABELLING_SESSION_DEFAULT,
                      src_filename=_SRC_FILENAME_DEFAULT,
                      output_filename=_OUTPUT_FILENAME_DEFAULT,

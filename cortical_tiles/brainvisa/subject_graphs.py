@@ -10,7 +10,7 @@ import json
 import os
 import re
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import wraps
 from typing import NamedTuple
@@ -63,11 +63,14 @@ class GraphSpec:
     graphs: per subject folder name, per side, the .arg files the caller lists.
     path_to_graph: the legacy relative path of today's glob.
     label: the labelling set chosen when graph discovery finds several.
+    path_filter: graph discovery keeps a candidate only when it returns True for the
+        candidate's path relative to the subject folder; None keeps every candidate.
     """
 
     graphs: Mapping[str, Mapping[str, Sequence[str]]] | None = None
     path_to_graph: str | None = None
     label: str | None = None
+    path_filter: Callable[[str], bool] | None = None
 
 
 class GraphSelection(NamedTuple):
@@ -228,6 +231,14 @@ def _walk_arg_files(subject_dir):
     return found
 
 
+def _discovery_candidates(root, path_filter):
+    """Returns the .arg files below root that path_filter accepts (relative path), walk order kept."""
+    candidates = _walk_arg_files(root)
+    if path_filter is None:
+        return candidates
+    return [path for path in candidates if path_filter(os.path.relpath(path, root))]
+
+
 def prescan_labelling_sets(subject_dirs, spec):
     """Raises SeveralLabellingSetsError naming every folder of subject_dirs with several sets.
 
@@ -239,7 +250,7 @@ def prescan_labelling_sets(subject_dirs, spec):
     collected = {}
     for folder in subject_dirs:
         root = os.fspath(folder)
-        sets = labelling_sets(_walk_arg_files(root))
+        sets = labelling_sets(_discovery_candidates(root, spec.path_filter))
         if len(sets) >= 2:
             collected[root] = sets
     if collected:
@@ -283,7 +294,7 @@ def resolve_subject_graphs(subject_dir, spec):
         result = _resolve_glob(subject_dir, spec.path_to_graph)
     else:
         root = os.fspath(subject_dir)
-        selection = select_graphs(root, _walk_arg_files(root), spec.label)
+        selection = select_graphs(root, _discovery_candidates(root, spec.path_filter), spec.label)
         _log_selection(root, selection)
         result = selection.graphs
     assert len(result) == 2, "resolve_subject_graphs post: len(result) == 2"
