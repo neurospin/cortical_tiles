@@ -17,7 +17,7 @@ from cortical_tiles.brainvisa.utils.skip_list import \
 from cortical_tiles.brainvisa.utils.subjects import \
     is_it_a_subject, select_good_qc
 
-from cortical_tiles.brainvisa import exception_handler
+from cortical_tiles.brainvisa import exception_handler, subject_cli
 from cortical_tiles.brainvisa.subject_graphs import \
     GraphSpec, check_spec_modes, load_graphs_map, prescan_labelling_sets, \
     resolve_subject_graphs, stop_on_several_labelling_sets
@@ -100,14 +100,7 @@ def parse_args(argv):
              "{\"L\": [.arg paths], \"R\": [.arg paths]}}; "
              "exclusive with a path_to_graph."
     )
-    parser.add_argument(
-        "--graph_label", "--graph-label", dest="graph_label", type=str,
-        default=None,
-        help="Labelling set to read during graph discovery: the name of "
-             "the folder holding the labelled graphs (for example "
-             "default_session_auto, sul-0_auto). Needed when a subject "
-             "holds several labelling sets."
-    )
+    subject_cli.add_graph_label_option(parser)
     parser.add_argument(
         "--path_sk_with_hull", type=str, required=True
     )
