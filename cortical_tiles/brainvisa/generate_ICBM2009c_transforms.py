@@ -50,13 +50,14 @@ import argparse
 import glob
 import sys
 import re
-from os import sep
 from os.path import abspath
 from os.path import basename
 from os.path import exists
-from os.path import relpath
+from os.path import isdir
 
 from cortical_tiles.brainvisa import exception_handler
+from cortical_tiles.brainvisa import subject_cli
+from cortical_tiles.brainvisa.subject_graphs import stop_on_several_labelling_sets
 from cortical_tiles.brainvisa.utils.folder import create_folder
 from cortical_tiles.brainvisa.utils.subjects import get_number_subjects, \
                                                   is_it_a_subject
@@ -77,7 +78,6 @@ from soma import aims
 from cortical_tiles.brainvisa.utils.constants import \
     _ALL_SUBJECTS, _SRC_DIR_DEFAULT, \
     _TRANSFORM_DIR_DEFAULT, _SIDE_DEFAULT, \
-    _PATH_TO_GRAPH_DEFAULT, \
     _QC_PATH_DEFAULT
 
 # Defines logger
@@ -113,11 +113,7 @@ def parse_args(argv):
     parser.add_argument(
         "-i", "--side", type=str, default=_SIDE_DEFAULT,
         help='Hemisphere side. Default is : ' + _SIDE_DEFAULT)
-    parser.add_argument(
-        "-p", "--path_to_graph", type=str,
-        default=_PATH_TO_GRAPH_DEFAULT,
-        help='Relative path to graph. '
-             'Default is ' + _PATH_TO_GRAPH_DEFAULT)
+    subject_cli.add_graph_options(parser)
     parser.add_argument(
         "-q", "--qc_path", type=str,
         default=_QC_PATH_DEFAULT,
@@ -160,6 +156,7 @@ def parse_args(argv):
     # So that we can use params dictionary directly as function arguments
     params.pop('output_dir')
     params.pop('verbose')
+    params.update(subject_cli.graph_params(args))
 
     return params
 
@@ -175,7 +172,7 @@ def get_transform_filename(side_transform_dir, side, subject, graph_file, bids):
     return f"{side_transform_dir}/{side}transform_to_ICBM2009c_{key}.trm"
 
 
-class GraphGenerateTransform:
+class GraphGenerateTransform(subject_cli.GraphStepInputs):
     """Class to convert all graphs from a folder into skeletons
 
     It contains all information to scan a dataset for graphs
@@ -184,14 +181,14 @@ class GraphGenerateTransform:
 
     def __init__(self, src_dir, transform_dir,
                  side, parallel,
-                 path_to_graph, bids, qc_path, skip_dir=None):
+                 path_to_graph, bids, qc_path, skip_dir=None, graph_label=None, graphs=None):
         self.src_dir = src_dir
         self.transform_dir = transform_dir
         # Skip-list directory: the transform_dir argument unless given
         self.skip_dir = transform_dir if skip_dir is None else skip_dir
         self.side = side
         self.parallel = parallel
-        self.path_to_graph = path_to_graph
+        self.set_graph_inputs(path_to_graph, graph_label, graphs)
         self.bids = bids
         self.qc_path = qc_path
         self.transform_dir = f"{self.transform_dir}/{self.side}"
@@ -209,12 +206,8 @@ class GraphGenerateTransform:
         the graph file; in BIDS mode the other graph files go on, and a graph
         file whose key was listed when the run started is left out.
         """
-        graph_path = f"{self.src_dir}/{subject}*/" +\
-                     f"{self.path_to_graph}/{self.side}*.arg"
+        list_graph_file, graph_path = self.graph_files(self._subject_folders(subject), f"{self.src_dir}/{subject}*")
         log.debug(graph_path)
-        list_graph_file = [
-            graph_file for graph_file in sorted(glob.glob(graph_path))
-            if covered_by(self._subject_folder(graph_file), {subject})]
         log.debug(f"list_graph_file = {list_graph_file}")
         if not list_graph_file:
             exc = FileNotFoundError(
@@ -241,9 +234,12 @@ class GraphGenerateTransform:
                 break
         return (subject, first_failure)
 
-    def _subject_folder(self, graph_file):
-        """Returns the first path part of ``graph_file`` under src_dir."""
-        return relpath(graph_file, self.src_dir).split(sep)[0]
+    def _subject_folders(self, subject):
+        """Returns the src_dir folders of subject, sorted: its own and its session folders."""
+        result = [f for f in sorted(glob.glob(f"{self.src_dir}/{subject}*"))
+                  if isdir(f) and covered_by(basename(f), {subject})]
+        assert result == sorted(result), "GraphReadingSteps._subject_folders post: result == sorted(result)"
+        return result
 
     def get_transform_filename(self, subject, graph_file):
         return get_transform_filename(
@@ -257,6 +253,7 @@ class GraphGenerateTransform:
         list_subjects = [basename(filename) for filename in filenames
                          if is_it_a_subject(filename)]
         log.info(f"Number of subjects before qc = {len(list_subjects)}")
+        self.prescan_listed(list_subjects)
         list_subjects = select_good_qc(list_subjects, self.qc_path)
         skipped = load_skipped(self.skip_dir, self.side)
         self.skipped_keys = frozenset(skipped)
@@ -307,7 +304,7 @@ class GraphGenerateTransform:
         log.info("\n".join(lines))
 
         # Checks if there is expected number of generated files
-        if self.bids:
+        if self.counts_listed_graphs():
             list_graphs = [g for g in
                            glob.glob(f"{self.src_dir}/*/{self.path_to_graph}")
                            if not re.search('.minf$', g)]
@@ -321,13 +318,13 @@ class GraphGenerateTransform:
 def generate_ICBM2009c_transforms(
         src_dir=_SRC_DIR_DEFAULT,
         transform_dir=_TRANSFORM_DIR_DEFAULT,
-        path_to_graph=_PATH_TO_GRAPH_DEFAULT,
+        path_to_graph=None,
         side=_SIDE_DEFAULT,
         bids=False,
         parallel=False,
         nb_subjects=_ALL_SUBJECTS,
         qc_path=_QC_PATH_DEFAULT,
-        skip_dir=None):
+        skip_dir=None, graph_label=None, graphs=None):
     """Generates skeletons from graphs
 
     skip_dir: directory of the per-side skip lists (cortical_tiles skip_list
@@ -343,13 +340,14 @@ def generate_ICBM2009c_transforms(
         bids=bids,
         parallel=parallel,
         qc_path=qc_path,
-        skip_dir=skip_dir
+        skip_dir=skip_dir, graph_label=graph_label, graphs=graphs
     )
     # Actual generation of skeletons from graphs
     transform.compute(nb_subjects=nb_subjects)
 
 
 @exception_handler
+@stop_on_several_labelling_sets
 def main(argv):
     """Reads argument line and generates transform to ICBM2009c from graph
 
@@ -363,7 +361,7 @@ def main(argv):
     generate_ICBM2009c_transforms(
         src_dir=params['src_dir'],
         transform_dir=params['transform_dir'],
-        path_to_graph=params['path_to_graph'],
+        path_to_graph=params['path_to_graph'], graph_label=params['graph_label'],
         side=params['side'],
         bids=params['bids'],
         parallel=params['parallel'],

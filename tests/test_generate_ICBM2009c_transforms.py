@@ -33,6 +33,20 @@ from cortical_tiles.brainvisa.generate_ICBM2009c_transforms import (
 from cortical_tiles.brainvisa.utils import skip_list
 from cortical_tiles.brainvisa.utils.skip_list import load_skip_entries, record_skip
 
+from tests.graph_trees import (
+    CLASSIC_FOLDS,
+    CLI_LABEL,
+    LABEL,
+    OTHER_LABEL,
+    SUBJECT,
+    UNLABELLED,
+    classic_subject,
+    cli_subject,
+    error_text,
+    touch,
+)
+from tests.graph_trees import SIDE as TREE_SIDE
+
 gt = generate_ICBM2009c_transforms
 
 STEP = "generate_ICBM2009c_transforms"
@@ -367,3 +381,123 @@ def test_command_line_run_leaves_out_the_subject_the_qc_file_rejects(layout, fak
 
     assert _read_subjects(fake_aims) == {accepted}
     assert _transform_file(layout, accepted).exists()
+
+
+# Graphs read through the cortical_tiles graph resolver (TASK-ARGDISC-BDRABCZUK-7E631CF8D649); trees of
+# empty .arg files from tests/graph_trees.py, read by the fake aims above.
+# * REQ-ARGDISC-BDRABCZUK-4ACD79CCFEBC - without path_to_graph, the .arg file the resolver returns is read.
+# * REQ-ARGDISC-BDRABCZUK-0999A87DE430 - the graphs of a subject are searched in the src_dir folders whose name, or
+#   whose name stripped of trailing session parts, equals the subject.
+# * REQ-ARGDISC-BDRABCZUK-99370E9DEBAA - a path_to_graph keeps today's glob <subject>/<path_to_graph>/<side>*.arg.
+# * REQ-ARGDISC-BDRABCZUK-4BA779D5BD7F - a graph label selects the .arg file of that labelling set.
+
+SESSION_FOLDS = "run-0/ana-0/folds/3.1"
+
+
+def _run_resolved(tmp_path, **kwargs):
+    """Runs the step on tmp_path/graphs for TREE_SIDE, without QC file nor BIDS."""
+    run_transforms(
+        src_dir=str(tmp_path / "graphs"),
+        transform_dir=str(tmp_path / "transforms"),
+        side=TREE_SIDE,
+        bids=False,
+        parallel=False,
+        nb_subjects=ALL_SUBJECTS,
+        qc_path="",
+        **kwargs,
+    )
+
+
+def _discovery_step(tmp_path, bids):
+    """The step object on tmp_path/graphs for TREE_SIDE, in graph discovery (no path_to_graph)."""
+    return gt.GraphGenerateTransform(
+        src_dir=str(tmp_path / "graphs"),
+        transform_dir=str(tmp_path / "transforms"),
+        side=TREE_SIDE,
+        parallel=False,
+        path_to_graph=None,
+        bids=bids,
+        qc_path="",
+    )
+
+
+def test_transforms_discovery_reads_labelled_graph_of_classic_layout(tmp_path, fake_aims):
+    """Without path_to_graph, the labelled graph of the classic layout is read, not the unlabelled one."""
+    graphs = classic_subject(tmp_path / "graphs")
+    _run_resolved(tmp_path)
+    assert fake_aims.reads == [graphs[LABEL]]
+
+
+def test_transforms_discovery_reads_labelled_graph_of_morphologist_cli_layout(tmp_path, fake_aims):
+    """Without path_to_graph, the labelled graph of the morphologist-cli layout is read."""
+    graphs = cli_subject(tmp_path / "graphs")
+    _run_resolved(tmp_path)
+    assert fake_aims.reads == [graphs[CLI_LABEL]]
+
+
+def test_transforms_command_line_without_path_to_graph_runs_discovery(tmp_path, fake_aims):
+    """A command line without --path_to_graph reads the graph the resolver finds."""
+    graphs = classic_subject(tmp_path / "graphs")
+    gt.main(["-s", str(tmp_path / "graphs"), "-o", str(tmp_path / "transforms"), "-i", TREE_SIDE])
+    assert fake_aims.reads == [graphs[LABEL]]
+
+
+def test_transforms_discovery_reads_each_session_folder_of_subject(tmp_path, fake_aims):
+    """In BIDS mode, subject sub-01 reads the labelled graph of its folders sub-01_ses-1 and sub-01_ses-2."""
+    first = cli_subject(tmp_path / "graphs", folder="sub-01_ses-1", folds=SESSION_FOLDS)
+    second = cli_subject(tmp_path / "graphs", folder="sub-01_ses-2", folds=SESSION_FOLDS)
+    assert _discovery_step(tmp_path, bids=True).generate_one_transform("sub-01") == ("sub-01", None)
+    assert fake_aims.reads == [first[CLI_LABEL], second[CLI_LABEL]]
+
+
+def test_transforms_discovery_leaves_out_folder_of_other_subject_sharing_prefix(tmp_path, fake_aims):
+    """Subject sub-01 reads the graph of folder sub-01 only, never the one of folder sub-010."""
+    own = cli_subject(tmp_path / "graphs", folder="sub-01")
+    cli_subject(tmp_path / "graphs", folder="sub-010")
+    assert _discovery_step(tmp_path, bids=False).generate_one_transform("sub-01") == ("sub-01", None)
+    assert fake_aims.reads == [own[CLI_LABEL]]
+
+
+def test_transforms_path_to_graph_keeps_todays_glob(tmp_path, fake_aims):
+    """A path_to_graph reads the <side>*.arg file of that folder, the unlabelled one here."""
+    graphs = classic_subject(tmp_path / "graphs")
+    _run_resolved(tmp_path, path_to_graph=CLASSIC_FOLDS)
+    assert fake_aims.reads == [graphs[UNLABELLED]]
+
+
+def test_transforms_graph_label_selects_labelling_set(tmp_path, fake_aims):
+    """Of two labelling sets, the graph label names the one read."""
+    graphs = classic_subject(tmp_path / "graphs", labels=(LABEL, OTHER_LABEL))
+    _run_resolved(tmp_path, graph_label=OTHER_LABEL)
+    assert fake_aims.reads == [graphs[OTHER_LABEL]]
+
+
+# Several labelling sets and graphs map (TASK-ARGDISC-BDRABCZUK-7E631CF8D649, user answer 2026-11-25 16:21).
+# * REQ-ARGDISC-BDRABCZUK-3F197E6A15D3 - no graph label, a subject folder holding two labelling sets: the command line
+#   exits with status 2 listing the sets, before any graph read (pre-scan of every subject folder; subject
+#   folder subj01, with one labelling set, sorts first).
+# * REQ-ARGDISC-BDRABCZUK-9BAC516428B6 - a graphs map gives the .arg files, per subject folder name and side.
+
+
+def test_transforms_command_line_exits_2_before_any_graph_read(tmp_path, fake_aims, caplog, capsys):
+    """Subject folder subj01 holds one labelling set, subj02 two: exit 2 listing both sets, no graph read."""
+    classic_subject(tmp_path / "graphs")
+    classic_subject(tmp_path / "graphs", subject="subj02", labels=(LABEL, OTHER_LABEL))
+
+    with caplog.at_level(logging.INFO), pytest.raises(SystemExit) as stopped:
+        gt.main(["-s", str(tmp_path / "graphs"), "-o", str(tmp_path / "transforms"), "-i", TREE_SIDE])
+
+    assert stopped.value.code == 2
+    assert fake_aims.reads == []
+    errors = error_text(caplog, capsys)
+    assert LABEL in errors and OTHER_LABEL in errors
+
+
+def test_transforms_graphs_map_reads_listed_graph(tmp_path, fake_aims):
+    """The graphs map lists, for subject folder subj01 and the side, a graph outside the folder: that one is read."""
+    classic_subject(tmp_path / "graphs")
+    listed = touch(tmp_path, f"elsewhere/{TREE_SIDE}{SUBJECT}_listed.arg")
+
+    _run_resolved(tmp_path, graphs={SUBJECT: {TREE_SIDE: [listed]}})
+
+    assert fake_aims.reads == [listed]

@@ -7,6 +7,8 @@ import numpy as np
 from cortical_tiles.brainvisa import generate_foldlabels
 from soma import aims
 
+from tests.graph_trees import ConvertingStep
+
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 
 
@@ -83,3 +85,45 @@ def test_generate_foldlabels_value_correspondance(tmp_path):
         aims.write(dtx.convert.volume_to_bucketMap_aims(np.squeeze(skeleton)), f"{tgt_dir}/skel_suppr_{mask}.bck")
 
         assert equal_buckets(f"{tgt_dir}/skel_suppr_{mask}.bck", f"{data_dir}/skel_suppr_{mask}.bck")
+
+
+# Graphs read through the cortical_tiles graph resolver (TASK-ARGDISC-BDRABCZUK-7E631CF8D649); trees of
+# empty .arg files and the checks from tests/graph_trees.py (ConvertingStep), the foldlabel writer replaced by a
+# recorder.
+# * REQ-ARGDISC-BDRABCZUK-6AA608C5D17D - without path_to_graph, the .arg file the resolver returns is converted.
+# * REQ-ARGDISC-BDRABCZUK-71F36FFF142B - a path_to_graph keeps today's glob <subject>/<path_to_graph>/<side>*.arg.
+# * REQ-ARGDISC-BDRABCZUK-C7F13C35114D - a graph label selects the .arg file of that labelling set.
+# * REQ-ARGDISC-BDRABCZUK-F490C14BAD45 - no graph label, a subject folder holding two labelling sets: the command line
+#   exits with status 2 listing the sets, before any graph conversion (pre-scan of every subject folder; subject
+#   folder subj01, with one labelling set, sorts first; user answer 2026-11-25 16:21).
+# * REQ-ARGDISC-BDRABCZUK-99CC91427F51 - a graphs map gives the .arg files, per subject folder name and side.
+
+STEP = ConvertingStep(generate_foldlabels, "generate_foldlabels", "generate_foldlabel_from_graph_file", "foldlabel_dir")
+
+
+def test_foldlabels_discovery_converts_labelled_graph_of_classic_layout(request):
+    STEP.converts_labelled_graph_of_classic_layout(request)
+
+
+def test_foldlabels_discovery_converts_labelled_graph_of_morphologist_cli_layout(request):
+    STEP.converts_labelled_graph_of_morphologist_cli_layout(request)
+
+
+def test_foldlabels_command_line_without_path_to_graph_runs_discovery(request):
+    STEP.command_line_without_path_to_graph_runs_discovery(request)
+
+
+def test_foldlabels_path_to_graph_keeps_todays_glob(request):
+    STEP.path_to_graph_keeps_todays_glob(request)
+
+
+def test_foldlabels_graph_label_selects_labelling_set(request):
+    STEP.graph_label_selects_labelling_set(request)
+
+
+def test_foldlabels_command_line_exits_2_before_any_conversion(request):
+    STEP.command_line_exits_2_before_any_conversion(request)
+
+
+def test_foldlabels_graphs_map_converts_listed_graph(request):
+    STEP.graphs_map_converts_listed_graph(request)
