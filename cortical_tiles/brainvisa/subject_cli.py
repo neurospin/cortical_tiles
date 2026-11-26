@@ -11,7 +11,12 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from os.path import join
 
-from cortical_tiles.brainvisa.subject_graphs import GraphSpec, prescan_labelling_sets, resolve_subject_graphs
+from cortical_tiles.brainvisa.subject_graphs import (
+    GraphSpec,
+    check_spec_modes,
+    prescan_labelling_sets,
+    resolve_subject_graphs,
+)
 from cortical_tiles.brainvisa.utils.constants import (
     _SIDE_DEFAULT,
     _SULCUS_DEFAULT,
@@ -38,6 +43,10 @@ _VERBOSE_HELP = (
 _PATH_TO_GRAPH_HELP = (
     "Relative path of the labelled graph folder below each subject folder (legacy glob "
     "<subject>/<path_to_graph>/<side><subject>*.arg). Default: graph discovery below each subject folder."
+)
+_STEP_PATH_TO_GRAPH_HELP = (
+    "Relative path of the graph folder below each subject folder: the .arg files are taken from the glob "
+    "<subject folder>/<path_to_graph>/<side>*.arg. Default: graph discovery below each subject folder."
 )
 _GRAPH_LABEL_HELP = (
     "Labelling set to read during graph discovery: the name of the folder holding the labelled graphs (for example "
@@ -81,15 +90,75 @@ def build_parser(cli: ScriptCli) -> argparse.ArgumentParser:
     parser.add_argument("-v", "--verbose", action="count", default=0, help=_VERBOSE_HELP)
     parser.add_argument("-x", "--out_voxel_size", type=float, default=_VOXEL_SIZE_DEFAULT, help=cli.voxel_size_help)
     # SUPPRESS keeps graph_label out of the namespace when absent: the logged command line stays the historical one
+    add_graph_label_option(parser, default=argparse.SUPPRESS)
+    return parser
+
+
+def add_graph_label_option(parser: argparse.ArgumentParser, default: object = None) -> None:
+    """Adds the one definition of the --graph_label option (alias --graph-label) to parser."""
     parser.add_argument(
         "--graph_label",
         "--graph-label",
         dest="graph_label",
         type=str,
-        default=argparse.SUPPRESS,
+        default=default,
         help=_GRAPH_LABEL_HELP,
     )
-    return parser
+
+
+def add_graph_options(parser: argparse.ArgumentParser) -> None:  # noqa: V103 - graph steps
+    """Adds -p/--path_to_graph (default: graph discovery) and --graph_label to a graph step's parser."""
+    parser.add_argument("-p", "--path_to_graph", type=str, default=None, help=_STEP_PATH_TO_GRAPH_HELP)
+    add_graph_label_option(parser)
+
+
+def graph_params(args: argparse.Namespace) -> dict:  # noqa: V103 - graph steps
+    """Returns the graph-input keywords of a graph step's API function, valued from the command line."""
+    result = {"graph_label": args.graph_label, "graphs": None}  # no graphs map on the command line
+    assert "graph_label" in result, 'SubjectCli.graph_params post: "graph_label" in result'
+    assert "graphs" in result, 'SubjectCli.graph_params post: "graphs" in result'
+    assert len(result) == 2, "SubjectCli.graph_params post: len(result) == 2"
+    return result
+
+
+class GraphStepInputs:  # noqa: V102 - base class of the graph steps
+    """Graph inputs of a graph step: graph discovery, a labelling set, a graphs map or the legacy path_to_graph glob.
+
+    The host class sets src_dir, side and bids; these methods read no other host attribute.
+    """
+
+    def set_graph_inputs(self, path_to_graph, graph_label=None, graphs=None) -> None:  # noqa: V105 - graph steps
+        """Sets the graph-input attributes and the graph specification (no I/O).
+
+        Raises:
+            ValueError: a graphs map is given beside a path_to_graph.
+        """
+        check_spec_modes(graphs, path_to_graph)
+        self.path_to_graph = path_to_graph
+        self.graph_label = graph_label
+        self.graphs = graphs
+        self.graph_spec = GraphSpec(graphs=graphs, path_to_graph=path_to_graph, label=graph_label)
+
+    def prescan_listed(self, subjects: list) -> None:  # noqa: V105 - graph steps
+        """Raises SeveralLabellingSetsError naming every listed subject folder with several labelling sets."""
+        prescan_labelling_sets([join(self.src_dir, subject) for subject in subjects], self.graph_spec)
+
+    def graph_files(self, folders: list, shown: str) -> tuple:  # noqa: V105 - graph steps
+        """Returns (the .arg files of the side in folders, the expected-path text of the no-graph message)."""
+        files = [g for folder in folders for g in resolve_subject_graphs(folder, self.graph_spec)[self.side]]
+        if self.path_to_graph is not None:
+            expected = f"{shown}/{self.path_to_graph}/{self.side}*.arg"
+        else:
+            mode = "graphs map" if self.graphs is not None else "graph discovery"
+            label = f", label {self.graph_label}" if self.graph_label is not None else ""
+            expected = f"{shown} ({mode}, side {self.side}{label})"
+        result = (files, expected)
+        assert len(result) == 2, "SubjectCli.graph_files post: len(result) == 2"
+        return result
+
+    def counts_listed_graphs(self) -> bool:  # noqa: V105 - graph steps
+        """Tells whether the end-of-step count compares the output with the listed graphs (BIDS, path_to_graph)."""
+        return self.bids and self.path_to_graph is not None
 
 
 def parse_subject_args(argv: list, cli: ScriptCli) -> dict:  # noqa: V103 - called by the scripts

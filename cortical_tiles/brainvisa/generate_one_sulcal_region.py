@@ -334,6 +334,8 @@ def run_with_params(params: dict):
     params['foldlabel_dir'] = os.path.join(params["output_dir"], "foldlabels")
     params['transform_dir'] = os.path.join(params["output_dir"], "transforms")
     params['crops_dir'] = os.path.join(params["output_dir"], "crops", masks_version)
+    # Graph inputs handed to each graph-reading step (None when absent)
+    step_graphs = {'graph_label': params.get('graph_label'), 'graphs': params.get('graphs')}
 
     # A default run never computes masks into the hand-corrected default
     # version: it refuses before any file is written. An explicit
@@ -440,7 +442,7 @@ def run_with_params(params: dict):
                 prog_name='pipeline_generate_skeletons.py',
                 suffix=full_side[1:])
 
-            generate_skeletons(**args_generate_skeletons)
+            generate_skeletons(**args_generate_skeletons, **step_graphs)
             log.info('Skeletons generated')
 
     # generate raw distmaps if required
@@ -512,7 +514,7 @@ def run_with_params(params: dict):
                       prog_name='pipeline_generate_foldlabels.py',
                       suffix=full_side[1:])
 
-            generate_foldlabels(**args_generate_foldlabels)
+            generate_foldlabels(**args_generate_foldlabels, **step_graphs)
             log.info('Raw foldlabels generated')
 
     ##########################################################
@@ -552,7 +554,7 @@ def run_with_params(params: dict):
                 prog_name='pipeline_generate_ICBM2009c_transforms.py',
                 suffix=full_side[1:])
 
-            generate_ICBM2009c_transforms(**args_generate_transforms)
+            generate_ICBM2009c_transforms(**args_generate_transforms, **step_graphs)
             log.info('Transforms generated')
 
     ##########################################################

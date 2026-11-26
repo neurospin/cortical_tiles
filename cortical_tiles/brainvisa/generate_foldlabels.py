@@ -56,6 +56,8 @@ from os.path import basename
 from p_tqdm import p_map
 
 from cortical_tiles.brainvisa import exception_handler
+from cortical_tiles.brainvisa import subject_cli
+from cortical_tiles.brainvisa.subject_graphs import stop_on_several_labelling_sets
 from cortical_tiles.brainvisa.utils.folder import create_folder
 from cortical_tiles.brainvisa.utils.subjects import \
     get_number_subjects, \
@@ -78,7 +80,7 @@ from cortical_tiles.config.logs import set_file_logger
 from cortical_tiles.brainvisa.utils.constants import \
     _ALL_SUBJECTS, _SRC_DIR_DEFAULT, \
     _FOLDLABEL_DIR_DEFAULT, _SIDE_DEFAULT, \
-    _JUNCTION_DEFAULT, _PATH_TO_GRAPH_DEFAULT, \
+    _JUNCTION_DEFAULT, \
     _QC_PATH_DEFAULT
 
 # Defines logger
@@ -113,11 +115,7 @@ def parse_args(argv):
     parser.add_argument(
         "-i", "--side", type=str, default=_SIDE_DEFAULT,
         help='Hemisphere side (either L or R).')
-    parser.add_argument(
-        "-p", "--path_to_graph", type=str,
-        default=_PATH_TO_GRAPH_DEFAULT,
-        help='Relative path to graph. '
-             'Default is ' + _PATH_TO_GRAPH_DEFAULT)
+    subject_cli.add_graph_options(parser)
     parser.add_argument(
         "-q", "--qc_path", type=str,
         default=_QC_PATH_DEFAULT,
@@ -168,13 +166,14 @@ def parse_args(argv):
     params['bids'] = args.bids
     params['qc_path'] = args.qc_path
     params['skip_dir'] = args.skip_dir
+    params.update(subject_cli.graph_params(args))
     # Checks if nb_subjects is either the string "all" or a positive integer
     params['nb_subjects'] = get_number_subjects(args.nb_subjects)
 
     return params
 
 
-class GraphConvert2FoldLabel:
+class GraphConvert2FoldLabel(subject_cli.GraphStepInputs):
     """Class to convert graph into foldlabel files
 
     It contains all information to scan a dataset for graphs
@@ -183,7 +182,7 @@ class GraphConvert2FoldLabel:
 
     def __init__(self, src_dir, foldlabel_dir,
                  side, junction, parallel,
-                 path_to_graph, bids, qc_path, skip_dir=None):
+                 path_to_graph, bids, qc_path, skip_dir=None, graph_label=None, graphs=None):
         self.src_dir = src_dir
         self.skip_dir = foldlabel_dir if skip_dir is None else skip_dir
         self.foldlabel_dir = foldlabel_dir
@@ -191,7 +190,7 @@ class GraphConvert2FoldLabel:
         self.qc_path = qc_path
         self.junction = junction
         self.parallel = parallel
-        self.path_to_graph = path_to_graph
+        self.set_graph_inputs(path_to_graph, graph_label, graphs)
         self.bids = bids
         self.foldlabel_dir = f"{self.foldlabel_dir}/{self.side}"
         self.skipped_keys = frozenset()
@@ -215,9 +214,7 @@ class GraphConvert2FoldLabel:
         out.
         """
         # Gets graph file path
-        graph_path = f"{self.src_dir}/{subject}/" +\
-                     f"{self.path_to_graph}/{self.side}*.arg"
-        list_graph_file = sorted(glob.glob(graph_path))
+        list_graph_file, graph_path = self.graph_files([f"{self.src_dir}/{subject}"], f"{self.src_dir}/{subject}")
         log.debug(f"list_graph_file = {list_graph_file}")
         if not list_graph_file:
             exc = FileNotFoundError(
@@ -250,6 +247,7 @@ class GraphConvert2FoldLabel:
         filenames = sorted(glob.glob(f"{self.src_dir}/*"))
         list_subjects = [basename(filename) for filename in filenames
                          if is_it_a_subject(filename)]
+        self.prescan_listed(list_subjects)
         log.info(f"Number of subjects before qc = {len(list_subjects)}")
         qc_subjects = select_good_qc(list_subjects, self.qc_path)
         skipped = load_skipped(self.skip_dir, self.side)
@@ -308,15 +306,14 @@ class GraphConvert2FoldLabel:
 
 def generate_foldlabels(
         src_dir=_SRC_DIR_DEFAULT,
-        foldlabel_dir=_FOLDLABEL_DIR_DEFAULT,
-        path_to_graph=_PATH_TO_GRAPH_DEFAULT,
+        foldlabel_dir=_FOLDLABEL_DIR_DEFAULT, path_to_graph=None,
         side=_SIDE_DEFAULT,
         junction=_JUNCTION_DEFAULT,
         bids=False,
         parallel=False,
         nb_subjects=_ALL_SUBJECTS,
         qc_path=_QC_PATH_DEFAULT,
-        skip_dir=None):
+        skip_dir=None, graph_label=None, graphs=None):
     """Generates foldlabels from graphs"""
 
     # Gets function arguments and values
@@ -331,6 +328,7 @@ def generate_foldlabels(
 
 
 @exception_handler
+@stop_on_several_labelling_sets
 def main(argv):
     """Reads argument line and generates foldlabel from graph
 

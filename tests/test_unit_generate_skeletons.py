@@ -167,6 +167,8 @@ def test_main_calls_generate_skeletons_with_its_own_parameter_names(tmp_path, mo
         bids=True,
         parallel=True,
         nb_subjects=2,
+        graph_label=None,
+        graphs=None,
     )
 
 
