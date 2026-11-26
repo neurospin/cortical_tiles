@@ -6,20 +6,29 @@ graph specification into the subject's .arg files, per side. Its pure core,
 """
 
 import glob
+import json
 import os
 import re
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from functools import wraps
 from typing import NamedTuple
 
 from cortical_tiles.config.logs import set_file_logger
 
 __all__ = [
+    "EXIT_SEVERAL_LABELLING_SETS",
     "GraphSelection",
     "GraphSpec",
+    "SeveralLabellingSetsError",
     "check_spec_modes",
+    "labelling_sets",
+    "load_graphs_map",
+    "prescan_labelling_sets",
     "resolve_subject_graphs",
     "select_graphs",
+    "stop_on_several_labelling_sets",
 ]
 
 log = set_file_logger(__file__)
@@ -29,6 +38,22 @@ LABELLED_SUFFIXES = ("_auto", "_manual")
 GRAPH_EXTENSION = ".arg"
 HEMI_ENTITY = re.compile(r"(?:^|_)hemi-([LR])(?:_|\.arg$)")
 DIGIT_RUNS = re.compile(r"(\d+)")
+# Process exit status of a command line stopped by several labelling sets
+EXIT_SEVERAL_LABELLING_SETS = 2
+
+
+class SeveralLabellingSetsError(ValueError):
+    """Graph discovery without a label met subject folders holding several labelling sets.
+
+    sets_by_folder: folder path -> sorted labelling set names, folders in the order given.
+    """
+
+    def __init__(self, sets_by_folder):
+        self.sets_by_folder = {folder: tuple(sets) for folder, sets in sets_by_folder.items()}
+        found = "; ".join(
+            f"{folder}: several labelling sets {list(sets)}" for folder, sets in self.sets_by_folder.items()
+        )
+        super().__init__(f"{found}; name one with a graph label (--graph_label)")
 
 
 @dataclass(frozen=True)
@@ -64,6 +89,54 @@ def check_spec_modes(graphs, path_to_graph):
         raise ValueError("graphs map and path_to_graph are exclusive")
 
 
+def _graphs_map_problem(graphs):
+    """Returns what keeps graphs from being {subject: {side: [str, ...]}}, else None."""
+    if not isinstance(graphs, dict):
+        return "the top level is not a JSON object"
+    for subject, sides in graphs.items():
+        if not isinstance(sides, dict):
+            return f"the value of {subject} is not a JSON object"
+        for side, paths in sides.items():
+            if not (isinstance(paths, list) and all(isinstance(p, str) for p in paths)):
+                return f"{subject} side {side} is not a list of paths"
+    return None
+
+
+def load_graphs_map(path):
+    """Returns the graphs map of a JSON file: subject folder name -> side -> .arg paths.
+
+    Raises OSError when the file cannot be read, ValueError when it is not such a map.
+    """
+    with open(path, encoding="utf-8") as stream:
+        try:
+            graphs = json.load(stream)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"graphs map {path}: {error}") from error
+    problem = _graphs_map_problem(graphs)
+    if problem is not None:
+        raise ValueError(f"graphs map {path}: {problem}")
+    assert isinstance(graphs, dict), "load_graphs_map post: isinstance(result, dict)"
+    return graphs
+
+
+def stop_on_several_labelling_sets(main):
+    """Decorator of a command-line main: several labelling sets end it with exit status 2.
+
+    The ERROR record lists each subject folder and its labelling sets; any other
+    exception passes through unchanged.
+    """
+
+    @wraps(main)
+    def wrapper(*args, **kwargs):
+        try:
+            return main(*args, **kwargs)
+        except SeveralLabellingSetsError as error:
+            log.error("%s", error)
+            sys.exit(EXIT_SEVERAL_LABELLING_SETS)
+
+    return wrapper
+
+
 def _side(path):
     """Returns the side of a .arg file: its hemi- entity, else its first letter."""
     name = os.path.basename(path)
@@ -85,6 +158,14 @@ def _natural_key(path):
     return tuple(int(p) if i % 2 else p for i, p in enumerate(parts)), path
 
 
+def labelling_sets(arg_paths):
+    """Returns the sorted distinct labelling sets of the .arg files that have a side."""
+    found = {_labelling_set(path) for path in arg_paths if _side(path) is not None}
+    result = sorted(labelling for labelling in found if labelling is not None)
+    assert result == sorted(result), "labelling_sets post: result == sorted(result)"
+    return result
+
+
 def _select_side(side, entries, chosen):
     """Returns ([kept] or [], left-out entries, kept file unlabelled) for one side.
 
@@ -103,18 +184,17 @@ def _select_side(side, entries, chosen):
 def select_graphs(subject_dir, arg_paths, label):
     """Chooses the .arg file of each side among arg_paths (no I/O, no logging).
 
-    Returns a GraphSelection. Raises ValueError when label is None and the
-    candidates hold two or more labelling sets.
+    Returns a GraphSelection. Raises SeveralLabellingSetsError (a ValueError)
+    when label is None and the candidates hold two or more labelling sets.
     """
     entries = {side: [] for side in SIDES}
     for path in arg_paths:
         side = _side(path)
         if side is not None:
             entries[side].append((path, _labelling_set(path)))
-    found = {labelling for pairs in entries.values() for _, labelling in pairs}
-    sets = sorted(labelling for labelling in found if labelling is not None)
+    sets = labelling_sets(arg_paths)
     if label is None and len(sets) >= 2:
-        raise ValueError(f"{subject_dir}: several labelling sets {sets}; name one")
+        raise SeveralLabellingSetsError({subject_dir: sets})
     chosen = label if label is not None else next(iter(sets), None)
     graphs, left_out, unlabelled_sides = {}, [], []
     for side in SIDES:
@@ -146,6 +226,24 @@ def _walk_arg_files(subject_dir):
     for path in subdirs:
         found.extend(_walk_arg_files(path))
     return found
+
+
+def prescan_labelling_sets(subject_dirs, spec):
+    """Raises SeveralLabellingSetsError naming every folder of subject_dirs with several sets.
+
+    Graph discovery without a label only: a graphs map, a path_to_graph or a
+    label makes it a no-op. Every folder is walked before the error is raised.
+    """
+    if spec.graphs is not None or spec.path_to_graph is not None or spec.label is not None:
+        return
+    collected = {}
+    for folder in subject_dirs:
+        root = os.fspath(folder)
+        sets = labelling_sets(_walk_arg_files(root))
+        if len(sets) >= 2:
+            collected[root] = sets
+    if collected:
+        raise SeveralLabellingSetsError(collected)
 
 
 def _resolve_listed(subject_dir, graphs):

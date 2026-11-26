@@ -49,6 +49,7 @@ from os.path import join
 import numpy as np
 from cortical_tiles.brainvisa import exception_handler
 from cortical_tiles.brainvisa import subject_cli
+from cortical_tiles.brainvisa.subject_graphs import stop_on_several_labelling_sets
 from cortical_tiles.brainvisa.utils.folder import create_folder
 from cortical_tiles.brainvisa.utils.referentials import \
     generate_ref_volume_ICBM2009c
@@ -65,7 +66,7 @@ from soma import aims
 from cortical_tiles.brainvisa.utils.constants import \
     _ALL_SUBJECTS, _SUPERVISED_SRC_DIR_DEFAULT, \
     _MASK_DIR_DEFAULT, _SIDE_DEFAULT, _SULCUS_DEFAULT, \
-    _VOXEL_SIZE_DEFAULT, _PATH_TO_GRAPH_SUPERVISED_DEFAULT
+    _VOXEL_SIZE_DEFAULT
 
 # Defines logger
 log = set_file_logger(__file__)
@@ -145,14 +146,16 @@ def increment_mask(subjects: list,
                    mask: aims.Volume,
                    sulcus: str,
                    voxel_size_out: tuple,
-                   sample_dir: str):
+                   sample_dir: str, graph_spec=None):
     """Increments mask for the chosen sulcus for all subjects
 
     Parameters:
         subjects: list containing all subjects to be analyzed
+        graph_spec: graph specification of graph discovery,
+            or None for the subjects' legacy graph_file glob
     """
 
-    for sub, graph_path in subject_cli.iter_subject_graphs(subjects, log):
+    for sub, graph_path in subject_cli.iter_subject_graphs(subjects, log, graph_spec):
         vol_one = increment_one_mask(graph_path, mask, sulcus, voxel_size_out)
         aims.write(vol_one, f"{sample_dir}/{sub['subject']}.nii.gz")
 
@@ -172,23 +175,25 @@ class MaskAroundSulcus(subject_cli.SulcusOverSubjects):
     http://www.bic.mni.mcgill.ca/~vfonov/icbm/2009/mni_icbm152_nlin_asym_09b_nifti.zip
     """
 
-    def __init__(self, src_dir=_SUPERVISED_SRC_DIR_DEFAULT, path_to_graph=_PATH_TO_GRAPH_SUPERVISED_DEFAULT,
+    def __init__(self, src_dir=_SUPERVISED_SRC_DIR_DEFAULT, path_to_graph=None,
                  mask_dir=_MASK_DIR_DEFAULT, sulcus=_SULCUS_DEFAULT, new_sulcus=None, side=_SIDE_DEFAULT,
-                 out_voxel_size=None):
+                 out_voxel_size=None, graph_label=None):
         """Inits with list of directories and list of sulci
 
         Attributes:
             src_dir: list of strings naming full path source directories
             path_to_graph: string naming relative path to labelled graph
+                (None: graph discovery below each subject folder)
             mask_dir: name of target directory with full path
             sulcus: sulcus name
             new_sulcus: new sulcus name
             side: hemisphere side (either L for left,
                                 or R for right hemisphere)
             out_voxel_size: float for voxel size in mm
+            graph_label: labelling set read during graph discovery
         """
 
-        super().__init__(src_dir, path_to_graph, sulcus, new_sulcus, side)
+        super().__init__(src_dir, path_to_graph, sulcus, new_sulcus, side, graph_label)
         self.mask_dir = mask_dir
         self.mask_sample_dir = f"{mask_dir}/{self.side}/{self.new_sulcus}"
         self.out_voxel_size = (out_voxel_size,
@@ -214,6 +219,8 @@ class MaskAroundSulcus(subject_cli.SulcusOverSubjects):
                 self.src_dir,
                 self.graph_file,
                 self.side)
+            # Stops on several labelling sets before any folder or graph read
+            subject_cli.prescan_subjects(subjects, self.graph_spec)
 
             # Creates target mask_dir if they don't exist
             create_folder(self.mask_dir)
@@ -237,7 +244,7 @@ class MaskAroundSulcus(subject_cli.SulcusOverSubjects):
                                self.mask,
                                self.sulcus,
                                self.out_voxel_size,
-                               self.mask_sample_dir)
+                               self.mask_sample_dir, self.graph_spec)
 
                 log.info(f"{self.sulcus}: max = {self.mask.np.max()}")
                 # Saving of generated masks
@@ -245,8 +252,8 @@ class MaskAroundSulcus(subject_cli.SulcusOverSubjects):
 
 
 def compute_mask(src_dir=_SUPERVISED_SRC_DIR_DEFAULT, mask_dir=_MASK_DIR_DEFAULT,
-                 path_to_graph=_PATH_TO_GRAPH_SUPERVISED_DEFAULT, sulcus=_SULCUS_DEFAULT, new_sulcus=None,
-                 side=_SIDE_DEFAULT, number_subjects=_ALL_SUBJECTS, out_voxel_size=None):
+                 path_to_graph=None, sulcus=_SULCUS_DEFAULT, new_sulcus=None,
+                 side=_SIDE_DEFAULT, number_subjects=_ALL_SUBJECTS, out_voxel_size=None, graph_label=None):
     """ Main program computing the box encompassing the sulcus in all subjects
 
     The programm loops over all subjects
@@ -257,18 +264,20 @@ def compute_mask(src_dir=_SUPERVISED_SRC_DIR_DEFAULT, mask_dir=_MASK_DIR_DEFAULT
         src_dir: list of strings -> directories of the supervised databases
         mask_dir: string giving target mask directory path
         path_to_graph: string giving relative path to manually labelled graph
+            (None: graph discovery below each subject folder)
         side: hemisphere side (either 'L' for left, or 'R' for right)
         sulcus: string giving the sulcus to analyze
         new_sulcus: string giving a new sulcus name (optional)
         number_subjects: integer giving the number of subjects to analyze,
             by default it is set to _ALL_SUBJECTS (-1)
         out_voxel_size: float giving voxel size
+        graph_label: labelling set read during graph discovery
 
     Returns:
         aims volume containing the mask
     """
     mask = MaskAroundSulcus(src_dir=src_dir, mask_dir=mask_dir, path_to_graph=path_to_graph, sulcus=sulcus,
-                            new_sulcus=new_sulcus, side=side, out_voxel_size=out_voxel_size)
+                            new_sulcus=new_sulcus, side=side, out_voxel_size=out_voxel_size, graph_label=graph_label)
     mask.compute(number_subjects=number_subjects)
 
     return mask.mask
@@ -297,6 +306,7 @@ def parse_args(argv: list) -> dict:
 
 
 @exception_handler
+@stop_on_several_labelling_sets
 def main(argv):
     """Reads argument line and determines the max bounding box
 
@@ -315,7 +325,7 @@ def main(argv):
         new_sulcus=params['new_sulcus'],
         side=params['side'],
         number_subjects=params['nb_subjects'],
-        out_voxel_size=params['out_voxel_size'])
+        out_voxel_size=params['out_voxel_size'], graph_label=params['graph_label'])
 
 
 ######################################################################
