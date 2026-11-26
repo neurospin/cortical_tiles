@@ -18,6 +18,9 @@ from cortical_tiles.brainvisa.utils.subjects import \
     is_it_a_subject, select_good_qc
 
 from cortical_tiles.brainvisa import exception_handler
+from cortical_tiles.brainvisa.subject_graphs import \
+    GraphSpec, check_spec_modes, load_graphs_map, prescan_labelling_sets, \
+    resolve_subject_graphs, stop_on_several_labelling_sets
 from cortical_tiles.config.logs import set_file_logger
 from generate_one_sulcal_region import crop_region_dir, run_with_params
 
@@ -85,7 +88,25 @@ def parse_args(argv):
         "Default is $DATASET_PATH/derivatives/."
     )
     parser.add_argument(
-        "--path_to_graph", type=str, required=True
+        "--path_to_graph", type=str, default=None,
+        help="Relative path of the graph folder below each subject folder "
+             "(legacy glob <subject>/<path_to_graph>/<side>*.arg). "
+             "Default: the JSON config's value, else graph discovery "
+             "below each subject folder."
+    )
+    parser.add_argument(
+        "--graphs", dest="graphs_file", type=str, default=None,
+        help="JSON graphs map file {subject folder name: "
+             "{\"L\": [.arg paths], \"R\": [.arg paths]}}; "
+             "exclusive with a path_to_graph."
+    )
+    parser.add_argument(
+        "--graph_label", "--graph-label", dest="graph_label", type=str,
+        default=None,
+        help="Labelling set to read during graph discovery: the name of "
+             "the folder holding the labelled graphs (for example "
+             "default_session_auto, sul-0_auto). Needed when a subject "
+             "holds several labelling sets."
     )
     parser.add_argument(
         "--path_sk_with_hull", type=str, required=True
@@ -224,6 +245,59 @@ def _check_local_graph_arguments(config: dict, arguments: dict) -> None:
                 "Morphologist graph layouts differ)")
 
 
+def _set_graph_inputs(config: dict, graphs_file, graph_label) -> None:
+    """Sets the graphs and graph_label keys of config from the options
+
+    The options override the JSON config's values; both keys are always
+    present, so every region run's configuration carries them.
+    """
+    if graphs_file is not None:
+        config["graphs"] = load_graphs_map(graphs_file)
+    else:
+        config.setdefault("graphs", None)
+    if graph_label is not None:
+        config["graph_label"] = graph_label
+    else:
+        config.setdefault("graph_label", None)
+
+
+def _graph_spec(config: dict) -> GraphSpec:
+    """Returns the graph specification of a run configuration"""
+    return GraphSpec(graphs=config.get("graphs"),
+                     path_to_graph=config.get("path_to_graph"),
+                     label=config.get("graph_label"))
+
+
+def _graph_subject_folders(graphs_dir: str) -> list:
+    """Returns the subject folders of graphs_dir, sorted"""
+    result = [path for path in sorted(glob.glob(f"{graphs_dir}/*"))
+              if is_it_a_subject(path)]
+    assert result == sorted(result), \
+        "_graph_subject_folders post: result == sorted(result)"
+    return result
+
+
+def _iter_graph_subject_folders(config: dict):
+    """Yields the subject folders of graphs_dir, listed on first use only
+
+    The pre-scan walks them in graph discovery without a label only, so a
+    run in another mode never lists graphs_dir.
+    """
+    yield from _graph_subject_folders(config["graphs_dir"])
+
+
+def _check_graph_inputs(config: dict) -> None:
+    """Checks the graph modes and pre-scans graphs_dir before any region run
+
+    Raises ValueError for a graphs map beside a path_to_graph, and
+    SeveralLabellingSetsError naming every subject folder of graphs_dir with
+    several labelling sets in graph discovery without a label.
+    """
+    check_spec_modes(config["graphs"], config.get("path_to_graph"))
+    prescan_labelling_sets(_iter_graph_subject_folders(config),
+                           _graph_spec(config))
+
+
 def _run_regions(resolved_config, regions, sides, input_types, njobs):
     """Runs every region; returns the sides that raised NoValidSubjectError
 
@@ -254,8 +328,17 @@ def _run_regions(resolved_config, regions, sides, input_types, njobs):
 def generate_sulcal_regions(regions, sides, input_types,
                             path_dataset, verbose, output_dir, path_to_graph,
                             path_sk_with_hull, sk_qc_path, njobs, masks=None,
-                            skel_seed=None):
+                            skel_seed=None, graphs_file=None,
+                            graph_label=None):
     """Global loops to generate all regions for all dataset
+
+    graphs_file names a JSON graphs map and graph_label a labelling set; both
+    reach each region run's configuration (keys graphs and graph_label).
+
+    Raises:
+        ValueError: a graphs map beside a path_to_graph, or a malformed map
+        SeveralLabellingSetsError: graph discovery without a label meets a
+            subject folder with several labelling sets (before any region run)
 
     Returns:
         (resolved_config, raised_sides), raised_sides being the set of the
@@ -271,6 +354,7 @@ def generate_sulcal_regions(regions, sides, input_types,
         resolved_config["masks_version"] = masks
     if skel_seed is not None:
         resolved_config["skel_seed"] = skel_seed
+    _set_graph_inputs(resolved_config, graphs_file, graph_label)
 
     if "$local" not in resolved_config.values():
         for src, key in {
@@ -317,16 +401,26 @@ def generate_sulcal_regions(regions, sides, input_types,
             elif k == "skel_qc_path":
                 resolved_config[k] = sk_qc_path
 
-    return resolved_config, _run_regions(
+    _check_graph_inputs(resolved_config)
+    result = resolved_config, _run_regions(
         resolved_config, regions, sides, input_types, njobs)
+    assert len(result) == 2, "generate_sulcal_regions post: len(result) == 2"
+    assert "graphs" in result[0], \
+        'generate_sulcal_regions post: "graphs" in result[0]'
+    assert "graph_label" in result[0], \
+        'generate_sulcal_regions post: "graph_label" in result[0]'
+    return result
 
 
 def _keeps_a_session(config, side, subject, skipped):
     """Tells if a graph key of subject lies outside skipped, or subject has no graph"""
-    graphs = glob.glob(
-        f"{config['graphs_dir']}/{subject}/{config['path_to_graph']}/{side}*.arg")
+    graphs = resolve_subject_graphs(join(config["graphs_dir"], subject),
+                                    _graph_spec(config))[side]
     keys = {session_key(subject, graph, True) for graph in graphs}
-    return not keys or bool(keys - skipped)
+    result = not keys or bool(keys - skipped)
+    assert isinstance(result, bool), \
+        "_keeps_a_session post: isinstance(result, bool)"
+    return result
 
 
 def valid_subjects(config, side):
@@ -335,8 +429,7 @@ def valid_subjects(config, side):
     In BIDS mode a subject also needs one graph key outside the skip list.
     """
     names = [basename(path)
-             for path in sorted(glob.glob(f"{config['graphs_dir']}/*"))
-             if is_it_a_subject(path)]
+             for path in _graph_subject_folders(config["graphs_dir"])]
     kept = select_good_qc(names, config.get("skel_qc_path", ""))
     skipped = load_skipped(config["output_dir"], side)
     if not config.get("bids"):
@@ -398,6 +491,7 @@ def run_exit_code(entries, valid, raised_sides):
 
 
 @exception_handler
+@stop_on_several_labelling_sets
 def main(argv):
     """Reads argument line and generates sulcal regions
     Args:

@@ -21,27 +21,30 @@ and a SENIOR-like multi-acquisition one (3TV2, 3TV10).
 * REQ-ARGDISC-BDRABCZUK-79B17D42F1AD - a label with no .arg file of its set on a side falls back to the unlabelled one.
 * REQ-ARGDISC-BDRABCZUK-1A08DF844E0D - a graphs map listing no .arg file for a side gives that side an empty list.
 * REQ-ARGDISC-BDRABCZUK-A9CA002C7448 - a graphs map beside a path_to_graph raises a ValueError.
+
+Invariants (TASK-ARGDISC-BDRABCZUK-817BCB001B96, Hypothesis properties at the end of the file):
+
+* REQ-INV-BDRABCZUK-FA9F38D59399 - check_spec_modes refuses every graphs map beside a path_to_graph.
+* REQ-INV-BDRABCZUK-D856FA136589 - check_spec_modes accepts every pair of which at most one is given.
+* REQ-INV-BDRABCZUK-88B929F4A5C4 - labelling_sets returns the set names in sorted order.
+* REQ-INV-BDRABCZUK-AFD949F556FC - resolve_subject_graphs returns exactly the keys L and R when it raises no error.
+
+The subject trees and ``touch`` are shared with the consumer tests (tests/graph_trees.py).
 """
 
 import logging
 import os
+import tempfile
+from pathlib import Path
 
 import pytest
+from hypothesis import assume, given, settings
+from hypothesis import strategies as st
 
+from cortical_tiles.brainvisa import subject_graphs
 from cortical_tiles.brainvisa.subject_graphs import GraphSpec, resolve_subject_graphs
-
-SUBJECT = "subj01"
-CLASSIC_FOLDS = "t1mri/BL/default_analysis/folds/3.1"
-CLI_SUBJECT = "sub-01"
-CLI_FOLDS = "ses-1/run-0/ana-0/folds/3.1"
-
-
-def _touch(root, relative):
-    """Creates the empty file root/relative and its folders; returns its path as a string."""
-    path = root / relative
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("")
-    return str(path)
+from tests.graph_trees import CLASSIC_FOLDS, CLI_FOLDS, CLI_SUBJECT, SUBJECT
+from tests.graph_trees import touch as _touch
 
 
 def _as_str(result):
@@ -384,3 +387,60 @@ def test_label_beside_path_to_graph_is_ignored(subject_dir):
     result = _as_str(resolve_subject_graphs(str(subject_dir), spec))
 
     assert result == {"L": [unlabelled["L"]], "R": [unlabelled["R"]]}
+
+
+# --- invariants (Hypothesis properties) --------------------------------------------------------------------------
+
+NAMES = st.text(alphabet="abcXY019-", min_size=1, max_size=6)
+GRAPHS_MAPS = st.dictionaries(
+    NAMES, st.fixed_dictionaries({"L": st.lists(NAMES, max_size=2), "R": st.lists(NAMES, max_size=2)}), max_size=3
+)
+PATHS_TO_GRAPH = st.text(alphabet="abc019_/", min_size=1, max_size=12)
+SET_FOLDERS = st.builds(lambda name, suffix: name + suffix, NAMES, st.sampled_from(["_auto", "_manual"]))
+GRAPH_FOLDERS = st.one_of(st.just("folds"), st.just("folds/3.1"), SET_FOLDERS.map(lambda name: f"folds/{name}"))
+GRAPH_NAMES = st.builds(
+    lambda side, tail: side + tail, st.sampled_from(["L", "R", "X"]), st.sampled_from([SUBJECT, f"{SUBJECT}_x", ""])
+)
+GRAPH_FILES = st.lists(st.tuples(GRAPH_FOLDERS, GRAPH_NAMES), max_size=6, unique=True)
+
+
+@settings(max_examples=50, deadline=None)
+@given(graphs=GRAPHS_MAPS, path_to_graph=PATHS_TO_GRAPH)
+def test_check_spec_modes_refuses_both_modes_property(graphs, path_to_graph):
+    """REQ-INV-BDRABCZUK-FA9F38D59399: a graphs map and a path_to_graph both given: a ValueError."""
+    with pytest.raises(ValueError):
+        subject_graphs.check_spec_modes(graphs, path_to_graph)
+
+
+@settings(max_examples=50, deadline=None)
+@given(graphs=st.none() | GRAPHS_MAPS, path_to_graph=st.none() | PATHS_TO_GRAPH)
+def test_check_spec_modes_accepts_at_most_one_mode_property(graphs, path_to_graph):
+    """REQ-INV-BDRABCZUK-D856FA136589: at most one of graphs map and path_to_graph given: no error."""
+    assume(graphs is None or path_to_graph is None)
+
+    assert subject_graphs.check_spec_modes(graphs, path_to_graph) is None
+
+
+@settings(max_examples=50, deadline=None)
+@given(files=GRAPH_FILES)
+def test_labelling_sets_are_sorted_property(files):
+    """REQ-INV-BDRABCZUK-88B929F4A5C4: for any list of .arg paths, the labelling set names come in sorted order."""
+    result = subject_graphs.labelling_sets([f"/data/{SUBJECT}/{folder}/{name}.arg" for folder, name in files])
+
+    assert list(result) == sorted(result)
+
+
+@settings(max_examples=40, deadline=None)
+@given(files=GRAPH_FILES, label=st.none() | SET_FOLDERS)
+def test_resolver_returns_both_sides_property(files, label):
+    """REQ-INV-BDRABCZUK-AFD949F556FC: any tree, any label: exactly the keys L and R, unless an error is raised."""
+    with tempfile.TemporaryDirectory() as root:
+        for folder, name in files:
+            _touch(Path(root), f"{SUBJECT}/{folder}/{name}.arg")
+        (Path(root) / SUBJECT).mkdir(exist_ok=True)
+        try:
+            result = resolve_subject_graphs(Path(root) / SUBJECT, GraphSpec(label=label))
+        except ValueError:
+            assume(False)  # several labelling sets without a label: the Requirement covers calls without an error
+
+    assert sorted(result) == ["L", "R"]

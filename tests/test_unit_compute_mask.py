@@ -206,13 +206,17 @@ def test_compute_mask_subject_without_graph_raises_runtime_error(tmp_path, datab
 
 
 def test_parse_args_maps_command_line_to_compute_mask_arguments(tmp_path):
-    """REQ-CTILESTEST-72: -o -> mask_dir, -s -> src_dir list, -n all -> -1."""
+    """REQ-CTILESTEST-72: -o -> mask_dir, -s -> src_dir list, -n all -> -1.
+
+    REQ-ARGDISC-BDRABCZUK-2BDF3B397515: without --graph_label, graph_label is None.
+    """
     out = str(tmp_path / "out")
     params = cm.parse_args(["-s", "A", "B", "-o", out, "-u", "S.C.", "-i", "L", "-p", "PG", "-x", "2", "-n", "all"])
 
     assert params == {
         "src_dir": ["A", "B"],
         "path_to_graph": "PG",
+        "graph_label": None,
         "mask_dir": out,
         "sulcus": "S.C.",
         "new_sulcus": None,

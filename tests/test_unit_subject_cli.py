@@ -5,8 +5,10 @@ scripts into cortical_tiles/brainvisa/subject_cli.py without changing behaviour.
 commit 13c0b13: its two scripts are read with ``git show`` and imported from a temporary folder, so every
 differential test compares the live code, new(x), with reference(x) on the same input.
 
-* REQ-ARGDISC-BDRABCZUK-FCDA39485EC4 - compute_mask keeps the 13c0b13 option names, help texts and defaults.
-* REQ-ARGDISC-BDRABCZUK-7EB26AD0D374 - compute_bounding_box keeps the 13c0b13 option names, help texts and defaults.
+* REQ-ARGDISC-BDRABCZUK-FCDA39485EC4 - compute_mask keeps the 13c0b13 option names, help texts and defaults, except
+  the -p help text and default (TASK-ARGDISC-BDRABCZUK-817BCB001B96, user answer Q10: -p defaults to graph discovery).
+* REQ-ARGDISC-BDRABCZUK-7EB26AD0D374 - compute_bounding_box keeps the 13c0b13 option names, help texts and defaults,
+  except the -p help text and default (same Task and answer).
 * REQ-ARGDISC-BDRABCZUK-6510E2C60F39 - compute_mask writes the 13c0b13 files.
 * REQ-ARGDISC-BDRABCZUK-5D734B6E014A - compute_mask ends with the 13c0b13 exit status and error message.
 * REQ-ARGDISC-BDRABCZUK-9F64E3BD111B - compute_bounding_box writes the 13c0b13 files.
@@ -221,6 +223,9 @@ def _end_case(src, case):
 
 
 # --- REQ-ARGDISC-BDRABCZUK-FCDA39485EC4 / 7EB26AD0D374: options, help texts, defaults -------------------------------
+# The -p entry and the path_to_graph default are no longer pinned to 13c0b13 (TASK-ARGDISC-BDRABCZUK-817BCB001B96):
+# REQ-ARGDISC-BDRABCZUK-01BAF5867D6C, 43383CED0624, EACFCA042A13 and A87BCC3E2819 state them, tested in
+# tests/test_unit_compute_mask_graphs.py and tests/test_unit_compute_bounding_box_graphs.py.
 
 COMMON_HELP = [
     "-h, --help show this help message and exit",
@@ -234,10 +239,6 @@ COMMON_HELP = [
         "Default is : None (same name as 'sulcus')"
     ),
     "-i SIDE, --side SIDE Hemisphere side. Default is : R",
-    (
-        "-p PATH_TO_GRAPH, --path_to_graph PATH_TO_GRAPH Relative path to manually labelled graph. "
-        "Default is t1mri/t1/default_analysis/folds/3.3/base2018_manual"
-    ),
     (
         "-n NB_SUBJECTS, --nb_subjects NB_SUBJECTS Number of subjects to take into account, or 'all'. "
         "0 subject is allowed, for debug purpose. Default is : all"
@@ -270,7 +271,6 @@ SCRIPT_HELP = {
 }
 SCRIPT_DEFAULTS = {
     "src_dir": "/neurospin/dico/data/bv_databases/human/manually_labeled/pclean/all",
-    "path_to_graph": "t1mri/t1/default_analysis/folds/3.3/base2018_manual",
     "sulcus": "F.C.M.ant.",
     "new_sulcus": None,
     "side": "R",
@@ -305,22 +305,22 @@ def _assert_keeps_reference_defaults(name, tmp_path):
 
 
 def test_compute_mask_keeps_reference_option_help(capsys, monkeypatch):
-    """REQ-ARGDISC-BDRABCZUK-FCDA39485EC4: prog, description and every option entry of 13c0b13."""
+    """REQ-ARGDISC-BDRABCZUK-FCDA39485EC4: prog, description and every option entry of 13c0b13 apart from -p."""
     _assert_keeps_reference_option_help("compute_mask", capsys, monkeypatch)
 
 
 def test_compute_mask_keeps_reference_defaults(tmp_path):
-    """REQ-ARGDISC-BDRABCZUK-FCDA39485EC4: default values of 13c0b13 (src_dir default stays a string)."""
+    """REQ-ARGDISC-BDRABCZUK-FCDA39485EC4: default values of 13c0b13 apart from -p (src_dir default stays a string)."""
     _assert_keeps_reference_defaults("compute_mask", tmp_path)
 
 
 def test_compute_bounding_box_keeps_reference_option_help(capsys, monkeypatch):
-    """REQ-ARGDISC-BDRABCZUK-7EB26AD0D374: prog, description and every option entry of 13c0b13."""
+    """REQ-ARGDISC-BDRABCZUK-7EB26AD0D374: prog, description and every option entry of 13c0b13 apart from -p."""
     _assert_keeps_reference_option_help("compute_bounding_box", capsys, monkeypatch)
 
 
 def test_compute_bounding_box_keeps_reference_defaults(tmp_path):
-    """REQ-ARGDISC-BDRABCZUK-7EB26AD0D374: default values of 13c0b13."""
+    """REQ-ARGDISC-BDRABCZUK-7EB26AD0D374: default values of 13c0b13 apart from -p."""
     _assert_keeps_reference_defaults("compute_bounding_box", tmp_path)
 
 

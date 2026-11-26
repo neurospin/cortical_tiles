@@ -48,6 +48,7 @@ from os.path import join
 import numpy as np
 from cortical_tiles.brainvisa import exception_handler
 from cortical_tiles.brainvisa import subject_cli
+from cortical_tiles.brainvisa.subject_graphs import stop_on_several_labelling_sets
 from cortical_tiles.brainvisa.utils.bbox import compute_max
 from cortical_tiles.brainvisa.utils.folder import create_folder
 from cortical_tiles.brainvisa.utils.logs import LogJson
@@ -64,8 +65,7 @@ from soma import aims
 # Import constants
 from cortical_tiles.brainvisa.utils.constants import \
     _ALL_SUBJECTS, _SUPERVISED_SRC_DIR_DEFAULT,\
-    _BBOX_DIR_DEFAULT, _SIDE_DEFAULT, _SULCUS_DEFAULT,\
-    _PATH_TO_GRAPH_SUPERVISED_DEFAULT
+    _BBOX_DIR_DEFAULT, _SIDE_DEFAULT, _SULCUS_DEFAULT
 
 # Defines logger
 log = set_file_logger(__file__)
@@ -142,7 +142,7 @@ def get_one_bounding_box(graph_filename, sulcus):
     return bbox_min, bbox_max
 
 
-def get_bounding_boxes(subjects, sulcus):
+def get_bounding_boxes(subjects, sulcus, graph_spec=None):
     """get bounding boxes of the chosen sulcus for all subjects.
 
     Function that outputs bounding box for the listed sulci on a manually
@@ -155,6 +155,8 @@ def get_bounding_boxes(subjects, sulcus):
     Args:
         subjects: list containing all subjects to be analyzed
         sulcus: str -> sulcus to be analyzed
+        graph_spec: graph specification of graph discovery,
+            or None for the subjects' legacy graph_file glob
 
     Returns:
         tuple (list_bbmin, list_bbmax) with:
@@ -168,7 +170,7 @@ def get_bounding_boxes(subjects, sulcus):
     list_bbmin = []
     list_bbmax = []
 
-    for sub, graph_path in subject_cli.iter_subject_graphs(subjects, log):
+    for sub, graph_path in subject_cli.iter_subject_graphs(subjects, log, graph_spec):
         bbox_min, bbox_max = get_one_bounding_box(graph_path, sulcus)
         if bbox_min is not None:
             list_bbmin.append([bbox_min[0], bbox_min[1], bbox_min[2]])
@@ -182,7 +184,9 @@ def get_bounding_boxes(subjects, sulcus):
                          'for the whole dataset. '
                          'It is an error. You should check sulcus name.')
 
-    return list_bbmin, list_bbmax
+    result = list_bbmin, list_bbmax
+    assert len(result) == 2, "RegionGraphInputs.get_bounding_boxes post: len(result) == 2"
+    return result
 
 
 def compute_box_voxel(bbmin_mni152, bbmax_mni152, voxel_size_out):
@@ -222,22 +226,24 @@ class BoundingBoxMax(subject_cli.SulcusOverSubjects):
     http://www.bic.mni.mcgill.ca/~vfonov/icbm/2009/mni_icbm152_nlin_asym_09b_nifti.zip
     """
 
-    def __init__(self, src_dir=_SUPERVISED_SRC_DIR_DEFAULT, path_to_graph=_PATH_TO_GRAPH_SUPERVISED_DEFAULT,
+    def __init__(self, src_dir=_SUPERVISED_SRC_DIR_DEFAULT, path_to_graph=None,
                  bbox_dir=_BBOX_DIR_DEFAULT, sulcus=_SULCUS_DEFAULT, new_sulcus=None, side=_SIDE_DEFAULT,
-                 out_voxel_size=None):
+                 out_voxel_size=None, graph_label=None):
         """Inits with list of directories and list of sulci
 
         Attributes:
             src_dir: list of strings naming full path source directories
             path_to_graph: string naming relative path to labelled graph
+                (None: graph discovery below each subject folder)
             bbox_dir: name of target directory with full path
             sulcus: sulcus name
             new_sulcus: new sulcus name
             side: hemisphere side (L for left, or R for right hemisphere)
             out_voxel_size: float for voxel size in mm
+            graph_label: labelling set read during graph discovery
         """
 
-        super().__init__(src_dir, path_to_graph, sulcus, new_sulcus, side)
+        super().__init__(src_dir, path_to_graph, sulcus, new_sulcus, side, graph_label)
         self.bbox_dir = bbox_dir
         self.voxel_size_out = (out_voxel_size,
                                out_voxel_size,
@@ -260,6 +266,8 @@ class BoundingBoxMax(subject_cli.SulcusOverSubjects):
                 self.src_dir,
                 self.graph_file,
                 self.side)
+            # Stops on several labelling sets before any JSON write or box read
+            subject_cli.prescan_subjects(subjects, self.graph_spec)
 
             # Logs general information on json file
             self.json.write_general_info()
@@ -280,7 +288,7 @@ class BoundingBoxMax(subject_cli.SulcusOverSubjects):
 
             # MAIN PROGRAM
             # Determines box for each subject
-            list_bbmin, list_bbmax = get_bounding_boxes(subjects, self.sulcus)
+            list_bbmin, list_bbmax = get_bounding_boxes(subjects, self.sulcus, self.graph_spec)
 
             # Determines the box encompassing the sulcus for all subjects
             # The coordinates are determined in MNI 152  space
@@ -320,8 +328,8 @@ class BoundingBoxMax(subject_cli.SulcusOverSubjects):
 
 
 def compute_bounding_box(src_dir=_SUPERVISED_SRC_DIR_DEFAULT, bbox_dir=_BBOX_DIR_DEFAULT,
-                         path_to_graph=_PATH_TO_GRAPH_SUPERVISED_DEFAULT, sulcus=_SULCUS_DEFAULT, new_sulcus=None,
-                         side=_SIDE_DEFAULT, number_subjects=_ALL_SUBJECTS, out_voxel_size=None):
+                         path_to_graph=None, sulcus=_SULCUS_DEFAULT, new_sulcus=None,
+                         side=_SIDE_DEFAULT, number_subjects=_ALL_SUBJECTS, out_voxel_size=None, graph_label=None):
     """ Main program computing the box encompassing the sulcus in all subjects
 
     The programm loops over all subjects
@@ -332,19 +340,21 @@ def compute_bounding_box(src_dir=_SUPERVISED_SRC_DIR_DEFAULT, bbox_dir=_BBOX_DIR
         src_dir: list of strings -> directories of the supervised databases
         bbox_dir: string giving target bbox directory path
         path_to_graph: string giving relative path to manually labelled graph
+            (None: graph discovery below each subject folder)
         side: hemisphere side (either 'L' for left, or 'R' for right)
         sulcus: string giving the sulcus to analyze
         new_sulcus: string giving a new sulcus name (optional)
         number_subjects: integer giving the number of subjects to analyze,
             by default it is set to _ALL_SUBJECTS (-1)
         out_voxel_size: float giving voxel size in mm
+        graph_label: labelling set read during graph discovery
 
     Returns:
         tuple (bbmin_vox, bbmax_vox)
     """
 
     box = BoundingBoxMax(src_dir=src_dir, bbox_dir=bbox_dir, path_to_graph=path_to_graph, sulcus=sulcus,
-                         new_sulcus=new_sulcus, side=side, out_voxel_size=out_voxel_size)
+                         new_sulcus=new_sulcus, side=side, out_voxel_size=out_voxel_size, graph_label=graph_label)
     bbmin_vox, bbmax_vox = box.compute(
         number_subjects=number_subjects)
 
@@ -374,6 +384,7 @@ def parse_args(argv: list) -> dict:
 
 
 @exception_handler
+@stop_on_several_labelling_sets
 def main(argv):
     """Reads argument line and determines the max bounding box
 
@@ -384,14 +395,10 @@ def main(argv):
     # Parsing arguments
     params = parse_args(argv)
     # Actual API
-    compute_bounding_box(src_dir=params['src_dir'],
-                         path_to_graph=params['path_to_graph'],
-                         bbox_dir=params['bbox_dir'],
-                         sulcus=params['sulcus'],
-                         new_sulcus=params['new_sulcus'],
-                         side=params['side'],
-                         number_subjects=params['nb_subjects'],
-                         out_voxel_size=params['out_voxel_size'])
+    compute_bounding_box(src_dir=params['src_dir'], path_to_graph=params['path_to_graph'], bbox_dir=params['bbox_dir'],
+                         sulcus=params['sulcus'], new_sulcus=params['new_sulcus'], side=params['side'],
+                         number_subjects=params['nb_subjects'], out_voxel_size=params['out_voxel_size'],
+                         graph_label=params['graph_label'])
 
 ######################################################################
 # Main program
