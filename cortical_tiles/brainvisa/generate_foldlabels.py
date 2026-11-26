@@ -46,25 +46,16 @@
 
 """
 
-import argparse
-import glob
 import sys
-from os.path import abspath
-from os.path import exists
 from os.path import basename
 
 from p_tqdm import p_map
 
 from cortical_tiles.brainvisa import exception_handler
-from cortical_tiles.brainvisa import subject_cli
+from cortical_tiles.brainvisa import graph_step
 from cortical_tiles.brainvisa.subject_graphs import stop_on_several_labelling_sets
-from cortical_tiles.brainvisa.utils.folder import create_folder
-from cortical_tiles.brainvisa.utils.subjects import \
-    get_number_subjects, \
-    is_it_a_subject
 from cortical_tiles.brainvisa.utils.subjects import select_subjects_int, \
     select_good_qc
-from cortical_tiles.brainvisa.utils.logs import setup_log
 from cortical_tiles.brainvisa.utils.parallel import define_njobs
 from cortical_tiles.brainvisa.utils.foldlabel import \
     generate_foldlabel_from_graph_file
@@ -73,7 +64,7 @@ from cortical_tiles.brainvisa.utils.quality_checks import \
     get_not_processed_subjects, \
     save_list_to_csv
 from cortical_tiles.brainvisa.utils.skip_list import \
-    load_skipped, record_skip, session_key
+    load_skipped, session_key
 from cortical_tiles.config.logs import set_file_logger
 
 # Import constants
@@ -90,241 +81,89 @@ log = set_file_logger(__file__)
 _STEP = "generate_foldlabels"
 
 
+_CLI = graph_step.StepCli(prog=basename(__file__), description='Generates foldlabel files from graphs',
+                          output_key='foldlabel_dir', output_default=_FOLDLABEL_DIR_DEFAULT,
+                          output_help='Output directory where to put fold label files.' 'Default is : ' + _FOLDLABEL_DIR_DEFAULT,
+                          src_help='Source directory where the graph data lies.' 'Default is : ' + _SRC_DIR_DEFAULT,
+                          side_help='Hemisphere side (either L or R).', skip_dir=True)
+
+
 def parse_args(argv):
-    """Parses command-line arguments
-
-    Args:
-        argv: a list containing command line arguments
-
-    Returns:
-        args
-    """
-
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(
-        prog=basename(__file__),
-        description='Generates foldlabel files from graphs')
-    parser.add_argument(
-        "-s", "--src_dir", type=str, default=_SRC_DIR_DEFAULT,
-        help='Source directory where the graph data lies.'
-             'Default is : ' + _SRC_DIR_DEFAULT)
-    parser.add_argument(
-        "-o", "--output_dir", type=str, default=_FOLDLABEL_DIR_DEFAULT,
-        help='Output directory where to put fold label files.'
-             'Default is : ' + _FOLDLABEL_DIR_DEFAULT)
-    parser.add_argument(
-        "-i", "--side", type=str, default=_SIDE_DEFAULT,
-        help='Hemisphere side (either L or R).')
-    subject_cli.add_graph_options(parser)
-    parser.add_argument(
-        "-q", "--qc_path", type=str,
-        default=_QC_PATH_DEFAULT,
-        help='Path to quality check .csv. '
-             'Default is ' + _QC_PATH_DEFAULT)
-    parser.add_argument(
-        "-j", "--junction", type=str, default=_JUNCTION_DEFAULT,
-        help='junction rendering (either \'wide\' or \'thin\') '
-             f"Default is {_JUNCTION_DEFAULT}")
-    parser.add_argument(
-        "-b", "--bids", default=False, action="store_true",
-        help="if the database uses the BIDS format"
-    )
-    parser.add_argument(
-        "-a", "--parallel", default=False, action='store_true',
-        help='if set (-a), launches computation in parallel')
-    parser.add_argument(
-        "-n", "--nb_subjects", type=str, default="all",
-        help='Number of subjects to take into account, or \'all\'. '
-             '0 subject is allowed, for debug purpose.'
-             'Default is : all')
-    parser.add_argument(
-        "--skip_dir", type=str, default=None,
-        help='Directory of the per-side skip lists skip_list_<side>.jsonl. '
-             'Default: the output directory.')
-    parser.add_argument(
-        '-v', '--verbose', action='count', default=0,
-        help='Verbose mode: '
-        'If no option is provided then logging.INFO is selected. '
-        'If one option -v (or -vv) or more is provided '
-        'then logging.DEBUG is selected.')
-
-    args = parser.parse_args(argv)
-
-    setup_log(args,
-              log_dir=f"{args.output_dir}",
-              prog_name=basename(__file__),
-              suffix='right' if args.side == 'R' else 'left')
-
-    params = {}
-
-    params['src_dir'] = abspath(args.src_dir)
-    params['foldlabel_dir'] = abspath(args.output_dir)
-    params['path_to_graph'] = args.path_to_graph
-    params['side'] = args.side
-    params['junction'] = args.junction
-    params['parallel'] = args.parallel
-    params['bids'] = args.bids
-    params['qc_path'] = args.qc_path
-    params['skip_dir'] = args.skip_dir
-    params.update(subject_cli.graph_params(args))
-    # Checks if nb_subjects is either the string "all" or a positive integer
-    params['nb_subjects'] = get_number_subjects(args.nb_subjects)
-
-    return params
+    """Parses command-line arguments"""
+    return graph_step.parse_step_args(argv, _CLI)
 
 
-class GraphConvert2FoldLabel(subject_cli.GraphStepInputs):
-    """Class to convert graph into foldlabel files
+class GraphConvert2FoldLabel(graph_step.GraphStep):
+    """Class to convert graph into foldlabel files"""
 
-    It contains all information to scan a dataset for graphs
-    and writes foldlabels into target directory
-    """
+    STEP = _STEP  # noqa: V107 - used through graph_step.GraphStep
+    LOG = log  # noqa: V107 - used through graph_step.GraphStep
+    ONE_SUBJECT = "generate_one_foldlabel"  # noqa: V107 - used through graph_step.GraphStep
 
     def __init__(self, src_dir, foldlabel_dir,
                  side, junction, parallel,
                  path_to_graph, bids, qc_path, skip_dir=None, graph_label=None, graphs=None):
-        self.src_dir = src_dir
-        self.skip_dir = foldlabel_dir if skip_dir is None else skip_dir
-        self.foldlabel_dir = foldlabel_dir
-        self.side = side
-        self.qc_path = qc_path
         self.junction = junction
-        self.parallel = parallel
-        self.set_graph_inputs(path_to_graph, graph_label, graphs)
-        self.bids = bids
-        self.foldlabel_dir = f"{self.foldlabel_dir}/{self.side}"
-        self.skipped_keys = frozenset()
-
-        create_folder(abspath(self.foldlabel_dir))
+        super().__init__(src_dir, foldlabel_dir, side, parallel, path_to_graph, bids, qc_path, skip_dir,
+                         graph_label, graphs)
 
     def get_foldlabel_filename(self, subject, graph_file):
         """Build foldlabel file name"""
         key = session_key(subject, graph_file, self.bids)
-        return f"{self.foldlabel_dir}/{self.side}foldlabel_{key}.nii.gz"
+        return f"{self.side_dir}/{self.side}foldlabel_{key}.nii.gz"
 
-    def generate_one_foldlabel(self, subject: str):
-        """Generates and writes foldlabel for one subject.
+    get_output_filename = get_foldlabel_filename  # noqa: V107 - used through graph_step.GraphStep
 
-        Returns (subject, None) on success or (subject, error_message) on
-        failure, error_message being the first failure of the subject. A
-        failure is recorded in the side's skip list with the key of the graph
-        file, so that compute() can collect a per-subject report without
-        crashing the whole batch; in BIDS mode the other graph files go on,
-        and a graph file whose key was listed when the run started is left
-        out.
-        """
+    def convert(self, graph_file, output_file):  # noqa: V105 - used through graph_step.GraphStep
+        generate_foldlabel_from_graph_file(graph_file, output_file, self.junction)
+
+    def map_parallel(self, one_subject, list_subjects):  # noqa: V105 - used through graph_step.GraphStep
+        return p_map(one_subject, list_subjects, num_cpus=define_njobs())
+
+    def generate_one_foldlabel(self, subject: str):  # noqa: V105 - used through graph_step.GraphStep
+        """Generates and writes foldlabel for one subject."""
         # Gets graph file path
         list_graph_file, graph_path = self.graph_files([f"{self.src_dir}/{subject}"], f"{self.src_dir}/{subject}")
         log.debug(f"list_graph_file = {list_graph_file}")
         if not list_graph_file:
-            exc = FileNotFoundError(
-                f"No graph file: {graph_path} doesn't exist")
-            record_skip(self.skip_dir, self.side, _STEP, subject, exc)
-            return subject, str(exc)
+            return subject, self.record_missing(subject, f"No graph file: {graph_path} doesn't exist")
+        return subject, self.convert_graphs(subject, list_graph_file)
 
-        first_failure = None
-        for graph_file in list_graph_file:
-            key = session_key(subject, graph_file, self.bids)
-            if self.bids and key in self.skipped_keys:
-                continue
-            try:
-                foldlabel_file = self.get_foldlabel_filename(
-                    subject, graph_file)
-                if not exists(foldlabel_file):
-                    generate_foldlabel_from_graph_file(
-                        graph_file, foldlabel_file, self.junction)
-            except Exception as exc:
-                record_skip(self.skip_dir, self.side, _STEP, key, exc)
-                first_failure = str(exc) if first_failure is None else first_failure
-            if not self.bids:
-                break
-        return subject, first_failure
-
-    def compute(self, nb_subjects):
+    def compute(self, nb_subjects):  # noqa: V105 - used through graph_step.GraphStep
         """Loops over subjects and converts graphs into skeletons.
         """
-        # Gets list of subject names
-        filenames = sorted(glob.glob(f"{self.src_dir}/*"))
-        list_subjects = [basename(filename) for filename in filenames
-                         if is_it_a_subject(filename)]
+        list_subjects = self.listed_subjects()
         self.prescan_listed(list_subjects)
         log.info(f"Number of subjects before qc = {len(list_subjects)}")
         qc_subjects = select_good_qc(list_subjects, self.qc_path)
         skipped = load_skipped(self.skip_dir, self.side)
-        self.skipped_keys = frozenset(skipped)
+        self.skipped_keys = frozenset(skipped)  # noqa: V101 - used through graph_step.GraphStep
         processable = [s for s in qc_subjects if s not in skipped]
         not_processed_subjects = get_not_processed_subjects(
-            processable, self.foldlabel_dir, "foldlabel_")
+            processable, self.side_dir, "foldlabel_")
 
         list_subjects = select_subjects_int(processable,
                                             not_processed_subjects,
                                             nb_subjects)
-
-        # Performs computation on all selected subjects
-        # either serially or in parallel
-        if self.parallel:
-            log.info(
-                "PARALLEL MODE: subjects are computed in parallel.")
-            results = p_map(
-                self.generate_one_foldlabel,
-                list_subjects,
-                num_cpus=define_njobs())
-        else:
-            log.info(
-                "SERIAL MODE: subjects are scanned serially, "
-                "without parallelism")
-            results = [self.generate_one_foldlabel(sub)
-                       for sub in list_subjects]
-
-        for result in results:
-            if isinstance(result, BaseException):
-                raise result
-
-        # Per-subject report, through the logger (nothing on stdout)
-        failures = {sub: reason for sub, reason in results
-                    if reason is not None}
-        n_ok = len(list_subjects) - len(failures)
-        lines = [
-            f"--- Foldlabel generation summary (side={self.side}) ---",
-            f"  Succeeded: {n_ok}/{len(list_subjects)}",
-        ]
-        if failures:
-            lines.append(f"  Skipped ({len(failures)}):")
-            for sub, reason in sorted(failures.items()):
-                lines.append(f"    {sub}: {reason}")
-        log.info("\n".join(lines))
+        results = self.run_subjects(list_subjects)
+        self.log_summary("Foldlabel generation", results, list_subjects)
 
         # Checks if there is the expected number of generated files
-        compare_number_aims_files_with_expected(self.foldlabel_dir,
+        compare_number_aims_files_with_expected(self.side_dir,
                                                 list_subjects)
         not_processed_subjects = get_not_processed_subjects(
-            qc_subjects, self.foldlabel_dir, "foldlabel_")
+            qc_subjects, self.side_dir, "foldlabel_")
         save_list_to_csv(
             not_processed_subjects,
-            f"{self.foldlabel_dir}/../not_processed_files_{self.side}.csv")
+            f"{self.side_dir}/../not_processed_files_{self.side}.csv")
 
 
-def generate_foldlabels(
-        src_dir=_SRC_DIR_DEFAULT,
-        foldlabel_dir=_FOLDLABEL_DIR_DEFAULT, path_to_graph=None,
-        side=_SIDE_DEFAULT,
-        junction=_JUNCTION_DEFAULT,
-        bids=False,
-        parallel=False,
-        nb_subjects=_ALL_SUBJECTS,
-        qc_path=_QC_PATH_DEFAULT,
-        skip_dir=None, graph_label=None, graphs=None):
+def generate_foldlabels(src_dir=_SRC_DIR_DEFAULT, foldlabel_dir=_FOLDLABEL_DIR_DEFAULT, path_to_graph=None,
+                        side=_SIDE_DEFAULT, junction=_JUNCTION_DEFAULT, bids=False, parallel=False,
+                        nb_subjects=_ALL_SUBJECTS, qc_path=_QC_PATH_DEFAULT, skip_dir=None, graph_label=None,
+                        graphs=None):
     """Generates foldlabels from graphs"""
-
-    # Gets function arguments and values
-    params = locals()
-    nb_subjects = params.pop('nb_subjects')
-
-    # Initialization
-    conversion = GraphConvert2FoldLabel(**params)
-
-    # Actual generation of foldlabels from graphs
-    conversion.compute(nb_subjects=nb_subjects)
+    GraphConvert2FoldLabel.run(locals())
 
 
 @exception_handler
@@ -335,11 +174,7 @@ def main(argv):
     Args:
         argv: a list containing command line arguments
     """
-    # Parsing arguments
-    params = parse_args(argv)
-
-    # Actual API
-    generate_foldlabels(**params)
+    generate_foldlabels(**parse_args(argv))
 
 
 if __name__ == '__main__':
