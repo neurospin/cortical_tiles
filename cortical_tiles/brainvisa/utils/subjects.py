@@ -33,7 +33,6 @@
 # The fact that you are presently reading this means that you have had
 # knowledge of the CeCILL license version 2 and that you accept its terms.
 
-import glob
 import os
 
 import pandas as pd
@@ -45,8 +44,7 @@ from cortical_tiles.config.logs import set_file_logger
 log = set_file_logger(__file__)
 
 QC_FOLDER = "qc"
-T1MRI_FOLDER = "t1mri"
-SESSION_FOLDERS = "ses-*"
+GRAPH_SUFFIX = ".arg"
 
 
 def get_number_subjects(nb_subjects: str) -> int:
@@ -223,26 +221,44 @@ def select_good_qc(orig_list: list, qc_path: str):
     return sublist
 
 
-def has_t1mri_folder(folder: str | os.PathLike) -> bool:
-    """Tell whether a t1mri folder sits directly in folder or directly in one of its ses- folders."""
-    base = glob.escape(os.fspath(folder))
-    patterns = (os.path.join(base, T1MRI_FOLDER), os.path.join(base, SESSION_FOLDERS, T1MRI_FOLDER))
-    return any(os.path.isdir(match) for pattern in patterns for match in sorted(glob.glob(pattern)))
+def has_graph(folder: str | os.PathLike) -> bool:
+    """Tell whether a file named *.arg, not starting with a dot, sits in folder or below it, outside dot folders.
+
+    Folders are scanned in sorted name order; a missing folder gives False.
+    Verbatim mirror of champollion_pipeline.utils.subject_folders.has_graph.
+    """
+    pending = [os.fspath(folder)]
+    while pending:
+        try:
+            entries = sorted(os.scandir(pending.pop()), key=lambda entry: entry.name)
+        except OSError:
+            continue
+        subfolders = []
+        for entry in entries:
+            if entry.name.startswith("."):
+                continue
+            if entry.is_dir():
+                if not entry.is_symlink():
+                    subfolders.append(entry.path)
+            elif entry.name.endswith(GRAPH_SUFFIX):
+                return True
+        pending.extend(reversed(subfolders))
+    return False
 
 
 def is_non_subject(path: str | os.PathLike) -> bool:
-    """Tell whether the folder at path is a dot-folder or a qc folder that holds no t1mri folder.
+    """Tell whether the folder at path is a dot-folder or a qc folder that holds no .arg file.
 
     A trailing separator changes nothing: the path is normalised before its last component is taken.
     Verbatim mirror of champollion_pipeline.utils.subject_folders.is_non_subject.
     """
     name = os.path.basename(os.path.normpath(os.fspath(path)))
-    return name.startswith(".") or (name == QC_FOLDER and not has_t1mri_folder(path))
+    return name.startswith(".") or (name == QC_FOLDER and not has_graph(path))
 
 
 def is_it_a_subject(filename):
     """Tell whether the entry at filename is a subject folder of a Morphologist root.
 
-    A plain file, a dot-folder and a qc folder holding no t1mri folder are no subjects.
+    A plain file, a dot-folder and a qc folder holding no .arg file are no subjects.
     """
     return os.path.isdir(filename) and not is_non_subject(filename)

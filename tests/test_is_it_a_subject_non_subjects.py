@@ -4,8 +4,9 @@ Stage 1 writes a ``qc/`` folder and an ``input_qc.tsv`` file beside the subject 
 Morphologist output root. The cortical_tiles steps list ``glob(src_dir/*)`` and keep the entries
 ``is_it_a_subject`` accepts, so both used to be counted as subjects, logged as skipped with
 "No graph file", and stage 2 reported a partial run. ``is_it_a_subject`` mirrors the pipeline's
-``is_non_subject`` (subject-folder-rule): a plain file, a dot-folder and a qc folder holding no t1mri
-folder at qc/t1mri or qc/ses-*/t1mri are no subjects; every other directory is one.
+``is_non_subject`` (layout-free subject-folder rule, TASK-ARGDISC-BDRABCZUK-8958D29D2B79): a plain file, a
+dot-folder and a qc folder holding no .arg file outside dot folders are no subjects; every other directory is
+one. No t1mri folder name plays a part.
 """
 
 import os
@@ -30,7 +31,7 @@ def test_plain_file_is_not_a_subject(tmp_path, name):
     assert is_it_a_subject(str(path)) is False
 
 
-# --- REQ-INPUTKIND-BDRABCZUK-5D3A134E01D3: a qc directory holding no t1mri folder is no subject -----
+# --- REQ-ARGDISC-BDRABCZUK-20C979C71097: a qc directory holding no .arg file outside dot folders is no subject
 
 
 @pytest.mark.parametrize(
@@ -45,7 +46,7 @@ def test_plain_file_is_not_a_subject(tmp_path, name):
     ids=["empty", "files-only", "session-without-t1mri", "t1mri-too-deep", "session-t1mri-too-deep"],
 )
 def test_qc_directory_is_not_a_subject(tmp_path, dirs, files):
-    """REQ-INPUTKIND-BDRABCZUK-5D3A134E01D3: a qc folder with no qc/t1mri nor qc/ses-*/t1mri folder is no subject."""
+    """REQ-ARGDISC-BDRABCZUK-20C979C71097: a qc folder holding no .arg file is no subject."""
     path = tmp_path / "qc"
     path.mkdir()
     for rel in dirs:
@@ -56,14 +57,55 @@ def test_qc_directory_is_not_a_subject(tmp_path, dirs, files):
     assert is_it_a_subject(str(path)) is False
 
 
-# --- REQ-INPUTKIND-BDRABCZUK-32A283331EC0: a qc directory holding a t1mri folder is a subject --------
-
-
-@pytest.mark.parametrize("t1mri", ["t1mri", "ses-01/t1mri", "ses-M00/t1mri"])
-def test_qc_directory_holding_t1mri_is_a_subject(tmp_path, t1mri):
-    """REQ-INPUTKIND-BDRABCZUK-32A283331EC0: a qc folder holding qc/t1mri or qc/ses-*/t1mri is a subject."""
+@pytest.mark.parametrize(
+    "t1mri",
+    ["t1mri", "ses-01/t1mri", "ses-M00/t1mri", "t1mri/default_acquisition/default_analysis/folds/3.1"],
+)
+def test_qc_directory_holding_t1mri_without_graph_is_not_a_subject(tmp_path, t1mri):
+    """REQ-ARGDISC-BDRABCZUK-20C979C71097: a t1mri folder no longer makes qc a subject; only a graph does."""
     path = tmp_path / "qc"
     (path / t1mri).mkdir(parents=True)
+    (path / t1mri / "qc_report.txt").write_text("")
+
+    assert is_it_a_subject(str(path)) is False
+
+
+@pytest.mark.parametrize(
+    "graph",
+    [
+        "t1mri/.snapshots/Lqc.arg",
+        "t1mri/default_acquisition/.trash/Rqc.arg",
+        "t1mri/default_acquisition/default_analysis/folds/3.1/.Lqc.arg",
+    ],
+    ids=["graph-in-dot-folder", "graph-in-nested-dot-folder", "dot-named-graph"],
+)
+def test_qc_directory_with_graphs_only_in_dot_entries_is_not_a_subject(tmp_path, graph):
+    """REQ-ARGDISC-BDRABCZUK-20C979C71097: a .arg file inside a dot folder, or named with a leading dot, does not count."""
+    path = tmp_path / "qc"
+    (path / graph).parent.mkdir(parents=True)
+    (path / graph).write_text("")
+
+    assert is_it_a_subject(str(path)) is False
+
+
+# --- REQ-ARGDISC-BDRABCZUK-48D6860C368B: a qc directory holding a .arg file outside dot folders is a subject
+
+
+@pytest.mark.parametrize(
+    "graph",
+    [
+        "Lqc.arg",
+        "folds/3.1/Lqc.arg",
+        "anat/ses-01/Rqc_ses-01.arg",
+        "ses-1/run-0/qc_ses-1_run-0_hemi-L.arg",
+    ],
+    ids=["graph-at-top", "graph-in-folds", "graph-in-session", "graph-morphologist-cli-like"],
+)
+def test_qc_directory_holding_a_graph_is_a_subject(tmp_path, graph):
+    """REQ-ARGDISC-BDRABCZUK-48D6860C368B: a qc folder holding a .arg file at any depth is a subject, no t1mri needed."""
+    path = tmp_path / "qc"
+    (path / graph).parent.mkdir(parents=True, exist_ok=True)
+    (path / graph).write_text("")
 
     assert is_it_a_subject(str(path)) is True
 
@@ -106,7 +148,7 @@ def fake_conversion(monkeypatch):
 
 
 def test_generate_skeletons_records_no_skip_for_root_qc_entries(tmp_path, fake_conversion):
-    """REQ-INPUTKIND-BDRABCZUK-79DC0919E3F4, REQ-INPUTKIND-BDRABCZUK-5D3A134E01D3: no skip for qc/, input_qc.tsv."""
+    """REQ-INPUTKIND-BDRABCZUK-79DC0919E3F4, REQ-ARGDISC-BDRABCZUK-20C979C71097: no skip for qc/, input_qc.tsv."""
     morpho = tmp_path / "morpho"
     folds = morpho / "s01" / PATH_TO_GRAPH
     folds.mkdir(parents=True)
