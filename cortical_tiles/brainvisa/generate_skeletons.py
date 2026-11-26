@@ -46,28 +46,21 @@
 
 """
 
-import argparse
 import glob
 import re
 import sys
-from os.path import abspath
 from os.path import basename
-from os.path import exists
 
 from p_tqdm import p_map
 
 from cortical_tiles.brainvisa import exception_handler
-from cortical_tiles.brainvisa import subject_cli
+from cortical_tiles.brainvisa import graph_step
 from cortical_tiles.brainvisa.subject_graphs import stop_on_several_labelling_sets
-from cortical_tiles.brainvisa.utils.folder import create_folder
-from cortical_tiles.brainvisa.utils.subjects import \
-    get_number_subjects, is_it_a_subject
 from cortical_tiles.brainvisa.utils.subjects import \
     select_subjects_int, select_good_qc
-from cortical_tiles.brainvisa.utils.logs import setup_log
 from cortical_tiles.brainvisa.utils.parallel import define_njobs
 from cortical_tiles.brainvisa.utils.skip_list import \
-    load_skipped, record_skip, session_key
+    load_skipped, session_key
 from cortical_tiles.brainvisa.utils.skeleton import \
     generate_skeleton_from_graph_file
 from cortical_tiles.brainvisa.utils.quality_checks import \
@@ -90,165 +83,66 @@ log = set_file_logger(__file__)
 _STEP = "generate_skeletons"
 
 
+_CLI = graph_step.StepCli(prog=basename(__file__), description='Generates skeleton files from graphs',
+                          output_key='skeleton_dir', output_default=_SKELETON_DIR_DEFAULT,
+                          output_help='Output directory where to put skeleton files.' 'Default is : ' + _SKELETON_DIR_DEFAULT)
+
+
 def parse_args(argv):
-    """Parses command-line arguments
-
-    Args:
-        argv: a list containing command line arguments
-
-    Returns:
-        args
-    """
-
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(
-        prog=basename(__file__),
-        description='Generates skeleton files from graphs')
-    parser.add_argument(
-        "-s", "--src_dir", type=str, default=_SRC_DIR_DEFAULT,
-        help='Source directory where the graph data lies. '
-             'Default is : ' + _SRC_DIR_DEFAULT)
-    parser.add_argument(
-        "-o", "--output_dir", type=str, default=_SKELETON_DIR_DEFAULT,
-        help='Output directory where to put skeleton files.'
-        'Default is : ' + _SKELETON_DIR_DEFAULT)
-    parser.add_argument(
-        "-i", "--side", type=str, default=_SIDE_DEFAULT,
-        help='Hemisphere side. Default is : ' + _SIDE_DEFAULT)
-    subject_cli.add_graph_options(parser)
-    parser.add_argument(
-        "-q", "--qc_path", type=str,
-        default=_QC_PATH_DEFAULT,
-        help='Path to quality check .csv. '
-             'Default is ' + _QC_PATH_DEFAULT)
-    parser.add_argument(
-        "-j", "--junction", type=str, default=_JUNCTION_DEFAULT,
-        help='junction rendering (either \'wide\' or \'thin\') '
-             f"Default is {_JUNCTION_DEFAULT}")
-    parser.add_argument(
-        "-b", "--bids", default=False, action="store_true",
-        help="if the database uses the BIDS format"
-    )
-    parser.add_argument(
-        "-a", "--parallel", default=False, action='store_true',
-        help='if set (-a), launches computation in parallel')
-    parser.add_argument(
-        "-n", "--nb_subjects", type=str, default="all",
-        help='Number of subjects to take into account, or \'all\'. '
-             '0 subject is allowed, for debug purpose.'
-             'Default is : all')
-    parser.add_argument(
-        '-v', '--verbose', action='count', default=0,
-        help='Verbose mode: '
-        'If no option is provided then logging.INFO is selected. '
-        'If one option -v (or -vv) or more is provided '
-        'then logging.DEBUG is selected.')
-
-    args = parser.parse_args(argv)
-
-    setup_log(args,
-              log_dir=f"{args.output_dir}",
-              prog_name=basename(__file__),
-              suffix='right' if args.side == 'R' else 'left')
-
-    params = vars(args)
-    params.update(subject_cli.graph_params(args))
-
-    params['src_dir'] = abspath(args.src_dir)
-    params['skeleton_dir'] = abspath(args.output_dir)
-    # Checks if nb_subjects is either the string "all" or a positive integer
-    params['nb_subjects'] = get_number_subjects(args.nb_subjects)
-
-    # Removes renamed params
-    # So that we can use params dictionary directly as function arugments
-    params.pop('output_dir')
-    params.pop('verbose')
-
-    return params
+    """Parses command-line arguments"""
+    return graph_step.parse_step_args(argv, _CLI)
 
 
-class GraphConvert2Skeleton(subject_cli.GraphStepInputs):
-    """Class to convert all graphs from a folder into skeletons
+class GraphConvert2Skeleton(graph_step.GraphStep):
+    """Class to convert all graphs from a folder into skeletons"""
 
-    It contains all information to scan a dataset for graphs
-    and writes skeletons into target directory
-    """
+    STEP = _STEP  # noqa: V107 - used through graph_step.GraphStep
+    LOG = log  # noqa: V107 - used through graph_step.GraphStep
+    ONE_SUBJECT = "generate_one_skeleton"  # noqa: V107 - used through graph_step.GraphStep
 
     def __init__(self, src_dir, skeleton_dir,
                  side, junction, parallel,
                  path_to_graph, bids, qc_path, njobs, skip_dir=None, graph_label=None, graphs=None):
-        self.src_dir = src_dir
-        self.skip_dir = skeleton_dir if skip_dir is None else skip_dir
-        self.skeleton_dir = skeleton_dir
-        self.side = side
-        self.qc_path = qc_path
         self.junction = junction
-        self.parallel = parallel
-        self.set_graph_inputs(path_to_graph, graph_label, graphs)
-        self.bids = bids
-        self.skeleton_dir = f"{self.skeleton_dir}/{self.side}"
         self.njobs = njobs
-        self.skipped_keys = frozenset()
-        create_folder(abspath(self.skeleton_dir))
+        super().__init__(src_dir, skeleton_dir, side, parallel, path_to_graph, bids, qc_path, skip_dir,
+                         graph_label, graphs)
 
     def get_skeleton_filename(self, subject, graph_file):
         key = session_key(subject, graph_file, self.bids)
-        return (f"{self.skeleton_dir}/"
+        return (f"{self.side_dir}/"
                 f"{self.side}skeleton_generated_{key}.nii.gz")
 
-    def generate_one_skeleton(self, subject: str):
-        """Generates and writes skeleton for one subject.
+    get_output_filename = get_skeleton_filename  # noqa: V107 - used through graph_step.GraphStep
 
-        A failure is recorded in the side's skip list under skip_dir, with the
-        key of the graph file; in BIDS mode the other graph files go on, and a
-        graph file whose key was listed when the run started is left out.
+    def convert(self, graph_file, output_file):  # noqa: V105 - used through graph_step.GraphStep
+        generate_skeleton_from_graph_file(graph_file, output_file, self.junction)
 
-        Returns:
-            None on success, (subject, graph glob pattern) when no graph
-            file is found, (subject, None) when a conversion raised.
-        """
+    def map_parallel(self, one_subject, list_subjects):  # noqa: V105 - used through graph_step.GraphStep
+        return p_map(one_subject, list_subjects, num_cpus=define_njobs(self.njobs))
+
+    def generate_one_skeleton(self, subject: str):  # noqa: V105 - used through graph_step.GraphStep
+        """Generates and writes skeleton for one subject."""
         list_graph_file, graph_path = self.graph_files([f"{self.src_dir}/{subject}"], f"{self.src_dir}/{subject}")
         log.debug(f"list_graph_file = {list_graph_file}")
         if len(list_graph_file) == 0:
-            exc = FileNotFoundError(f"No graph file for subject {subject} "
-                                    f"(expected: {graph_path})")
-            record_skip(self.skip_dir, self.side, _STEP, subject, exc)
+            self.record_missing(subject, f"No graph file for subject {subject} (expected: {graph_path})")
             return (subject, graph_path)
-        failed = False
-        for graph_file in list_graph_file:
-            key = session_key(subject, graph_file, self.bids)
-            if self.bids and key in self.skipped_keys:
-                continue
-            try:
-                skeleton_file = self.get_skeleton_filename(subject,
-                                                           graph_file)
-                if not exists(skeleton_file):
-                    generate_skeleton_from_graph_file(
-                        graph_file,
-                        skeleton_file,
-                        self.junction)
-            except Exception as exc:
-                record_skip(self.skip_dir, self.side, _STEP, key, exc)
-                failed = True
-            if not self.bids:
-                break
-        return (subject, None) if failed else None
+        return None if self.convert_graphs(subject, list_graph_file) is None else (subject, None)
 
-    def compute(self, nb_subjects):
+    def compute(self, nb_subjects):  # noqa: V105 - used through graph_step.GraphStep
         """Loops over subjects and converts graphs into skeletons.
         """
         skipped_before = load_skipped(self.skip_dir, self.side)
-        self.skipped_keys = frozenset(skipped_before)
+        self.skipped_keys = frozenset(skipped_before)  # noqa: V101 - used through graph_step.GraphStep
         # Gets list of subjects
-        filenames = sorted(glob.glob(f"{self.src_dir}/*"))
-        list_subjects = [basename(filename) for filename in filenames
-                         if is_it_a_subject(filename)]
+        list_subjects = self.listed_subjects()
         self.prescan_listed(list_subjects)
         log.info(f"Number of subjects before qc = {len(list_subjects)}")
         list_subjects = select_good_qc(list_subjects, self.qc_path)
         list_subjects = [s for s in list_subjects if s not in skipped_before]
         not_processed_subjects = \
-            get_not_processed_subjects(list_subjects, self.skeleton_dir)
+            get_not_processed_subjects(list_subjects, self.side_dir)
 
         list_subjects = select_subjects_int(list_subjects,
                                             not_processed_subjects,
@@ -258,22 +152,7 @@ class GraphConvert2Skeleton(subject_cli.GraphStepInputs):
         log.info(f"list_subjects[:5] = {list_subjects[:5]}")
         log.debug(f"list_subjects = {list_subjects}")
 
-        # Performs computation on all subjects either serially or in parallel
-        if self.parallel:
-            log.info(
-                "PARALLEL MODE: subjects are computed in parallel.")
-            results = p_map(self.generate_one_skeleton,
-                            list_subjects,
-                            num_cpus=define_njobs(self.njobs))
-        else:
-            log.info(
-                "SERIAL MODE: subjects are scanned serially, "
-                "without parallelism")
-            results = [self.generate_one_skeleton(sub) for sub in list_subjects]
-
-        for r in results:
-            if isinstance(r, BaseException):
-                raise r
+        results = self.run_subjects(list_subjects)
         failed = [r for r in results if r is not None]
         skipped = [r for r in failed if r[1] is not None]
         n_total = len(list_subjects)
@@ -294,7 +173,7 @@ class GraphConvert2Skeleton(subject_cli.GraphStepInputs):
 
             # Write QC CSV so the caller can review / feed back as --sk_qc_path
             import csv
-            qc_csv = f"{self.skeleton_dir}/skipped_subjects.csv"
+            qc_csv = f"{self.side_dir}/skipped_subjects.csv"
             with open(qc_csv, "w", newline="") as fh:
                 writer = csv.writer(fh)
                 writer.writerow(["subject", "expected_graph_path"])
@@ -309,37 +188,19 @@ class GraphConvert2Skeleton(subject_cli.GraphStepInputs):
             list_graphs = \
                 [g for g in glob.glob(f"{self.src_dir}/*/{self.path_to_graph}")
                  if not re.search('.minf$', g)]
-            compare_number_aims_files_with_expected(self.skeleton_dir,
+            compare_number_aims_files_with_expected(self.side_dir,
                                                     list_graphs)
         else:
-            compare_number_aims_files_with_expected(self.skeleton_dir,
+            compare_number_aims_files_with_expected(self.side_dir,
                                                     list_subjects)
 
 
-def generate_skeletons(
-        src_dir=_SRC_DIR_DEFAULT,
-        skeleton_dir=_SKELETON_DIR_DEFAULT,
-        path_to_graph=None,
-        side=_SIDE_DEFAULT,
-        junction=_JUNCTION_DEFAULT,
-        bids=False,
-        parallel=False,
-        nb_subjects=_ALL_SUBJECTS,
-        qc_path=_QC_PATH_DEFAULT,
-        njobs=_NB_JOBS_DEFAULT,
-        skip_dir=None, graph_label=None, graphs=None):
+def generate_skeletons(src_dir=_SRC_DIR_DEFAULT, skeleton_dir=_SKELETON_DIR_DEFAULT, path_to_graph=None,
+                       side=_SIDE_DEFAULT, junction=_JUNCTION_DEFAULT, bids=False, parallel=False,
+                       nb_subjects=_ALL_SUBJECTS, qc_path=_QC_PATH_DEFAULT, njobs=_NB_JOBS_DEFAULT, skip_dir=None,
+                       graph_label=None, graphs=None):
     """Generates skeletons from graphs"""
-
-    # Gets function arguments and values
-    params = locals()
-    nb_subjects = params.pop('nb_subjects')
-
-    # Initialization with same arguments and values as function
-    conversion = GraphConvert2Skeleton(
-        **params
-    )
-    # Actual generation of skeletons from graphs
-    conversion.compute(nb_subjects=nb_subjects)
+    GraphConvert2Skeleton.run(locals())
 
 
 @exception_handler
@@ -350,11 +211,7 @@ def main(argv):
     Args:
         argv: a list containing command line arguments
     """
-    # Parsing arguments
-    params = parse_args(argv)
-
-    # Actual API
-    generate_skeletons(**params)
+    generate_skeletons(**parse_args(argv))
 
 
 if __name__ == '__main__':

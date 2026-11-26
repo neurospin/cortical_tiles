@@ -46,30 +46,23 @@
 
 """
 
-import argparse
 import glob
 import sys
 import re
-from os.path import abspath
 from os.path import basename
-from os.path import exists
 from os.path import isdir
 
 from cortical_tiles.brainvisa import exception_handler
-from cortical_tiles.brainvisa import subject_cli
+from cortical_tiles.brainvisa import graph_step
 from cortical_tiles.brainvisa.subject_graphs import stop_on_several_labelling_sets
-from cortical_tiles.brainvisa.utils.folder import create_folder
-from cortical_tiles.brainvisa.utils.subjects import get_number_subjects, \
-                                                  is_it_a_subject
 from cortical_tiles.brainvisa.utils.subjects import \
     select_subjects_int, select_good_qc
-from cortical_tiles.brainvisa.utils.logs import setup_log
 from cortical_tiles.brainvisa.utils.parallel import define_njobs
 from cortical_tiles.brainvisa.utils.quality_checks import \
     compare_number_aims_files_with_expected, \
     get_not_processed_subjects_transform
 from cortical_tiles.brainvisa.utils.skip_list import \
-    covered_by, load_skipped, record_skip, session_key
+    covered_by, load_skipped, session_key
 from pqdm.processes import pqdm
 from cortical_tiles.config.logs import set_file_logger
 from soma import aims
@@ -87,78 +80,16 @@ log = set_file_logger(__file__)
 _STEP = "generate_ICBM2009c_transforms"
 
 
+_CLI = graph_step.StepCli(prog=basename(__file__),
+                          description='Generates transformation files ' 'to ICBM 2009c template from graphs',
+                          output_key='transform_dir', output_default=_TRANSFORM_DIR_DEFAULT,
+                          output_help='Output directory where to put skeleton files.' 'Default is : ' + _TRANSFORM_DIR_DEFAULT,
+                          bids_help="If the database uses the BIDS format", junction=False)
+
+
 def parse_args(argv):
-    """Parses command-line arguments
-
-    Args:
-        argv: a list containing command line arguments
-
-    Returns:
-        args
-    """
-
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(
-        prog=basename(__file__),
-        description='Generates transformation files '
-                    'to ICBM 2009c template from graphs')
-    parser.add_argument(
-        "-s", "--src_dir", type=str, default=_SRC_DIR_DEFAULT,
-        help='Source directory where the graph data lies. '
-             'Default is : ' + _SRC_DIR_DEFAULT)
-    parser.add_argument(
-        "-o", "--output_dir", type=str, default=_TRANSFORM_DIR_DEFAULT,
-        help='Output directory where to put skeleton files.'
-        'Default is : ' + _TRANSFORM_DIR_DEFAULT)
-    parser.add_argument(
-        "-i", "--side", type=str, default=_SIDE_DEFAULT,
-        help='Hemisphere side. Default is : ' + _SIDE_DEFAULT)
-    subject_cli.add_graph_options(parser)
-    parser.add_argument(
-        "-q", "--qc_path", type=str,
-        default=_QC_PATH_DEFAULT,
-        help='Path to quality check .csv. '
-             'Default is ' + _QC_PATH_DEFAULT)
-    parser.add_argument(
-        "-b", "--bids", default=False, action="store_true",
-        help="If the database uses the BIDS format"
-    )
-    parser.add_argument(
-        "-a", "--parallel", default=False, action='store_true',
-        help='if set (-a), launches computation in parallel')
-    parser.add_argument(
-        "-n", "--nb_subjects", type=str, default="all",
-        help='Number of subjects to take into account, or \'all\'. '
-             '0 subject is allowed, for debug purpose.'
-             'Default is : all')
-    parser.add_argument(
-        '-v', '--verbose', action='count', default=0,
-        help='Verbose mode: '
-        'If no option is provided then logging.INFO is selected. '
-        'If one option -v (or -vv) or more is provided '
-        'then logging.DEBUG is selected.')
-
-    args = parser.parse_args(argv)
-
-    setup_log(args,
-              log_dir=f"{args.output_dir}",
-              prog_name=basename(__file__),
-              suffix='right' if args.side == 'R' else 'left')
-
-    params = vars(args)
-
-    params['src_dir'] = abspath(args.src_dir)
-    params['transform_dir'] = abspath(args.output_dir)
-    # Checks if nb_subjects is either the string "all" or a positive integer
-    params['nb_subjects'] = get_number_subjects(args.nb_subjects)
-
-    # Removes renamed params
-    # So that we can use params dictionary directly as function arguments
-    params.pop('output_dir')
-    params.pop('verbose')
-    params.update(subject_cli.graph_params(args))
-
-    return params
+    """Parses command-line arguments"""
+    return graph_step.parse_step_args(argv, _CLI)
 
 
 def get_transform_filename(side_transform_dir, side, subject, graph_file, bids):
@@ -172,67 +103,29 @@ def get_transform_filename(side_transform_dir, side, subject, graph_file, bids):
     return f"{side_transform_dir}/{side}transform_to_ICBM2009c_{key}.trm"
 
 
-class GraphGenerateTransform(subject_cli.GraphStepInputs):
-    """Class to convert all graphs from a folder into skeletons
+class GraphGenerateTransform(graph_step.GraphStep):
+    """Class to write the ICBM2009c transforms of all graphs from a folder"""
 
-    It contains all information to scan a dataset for graphs
-    and writes skeletons and foldlabels into target directory
-    """
+    STEP = _STEP  # noqa: V107 - used through graph_step.GraphStep
+    LOG = log  # noqa: V107 - used through graph_step.GraphStep
+    ONE_SUBJECT = "generate_one_transform"  # noqa: V107 - used through graph_step.GraphStep
+    PARALLEL_MESSAGE = "PARALLEL MODE: transforms are generated in parallel."  # noqa: V107 - used through graph_step.GraphStep
+    SERIAL_MESSAGE = "SERIAL MODE: transforms are generated serially, without parallelism"  # noqa: V107 - used through graph_step.GraphStep
 
     def __init__(self, src_dir, transform_dir,
                  side, parallel,
                  path_to_graph, bids, qc_path, skip_dir=None, graph_label=None, graphs=None):
-        self.src_dir = src_dir
-        self.transform_dir = transform_dir
-        # Skip-list directory: the transform_dir argument unless given
-        self.skip_dir = transform_dir if skip_dir is None else skip_dir
-        self.side = side
-        self.parallel = parallel
-        self.set_graph_inputs(path_to_graph, graph_label, graphs)
-        self.bids = bids
-        self.qc_path = qc_path
-        self.transform_dir = f"{self.transform_dir}/{self.side}"
-        self.skipped_keys = frozenset()
-        create_folder(abspath(self.transform_dir))
+        super().__init__(src_dir, transform_dir, side, parallel, path_to_graph, bids, qc_path, skip_dir,
+                         graph_label, graphs)
 
-    def generate_one_transform(self, subject: str):
-        """Generates and writes ICBM2009c transform for one subject.
-
-        Returns (subject, None) on success or (subject, error_message) on
-        failure, error_message being the first failure of the subject, so
-        that compute() can collect a per-subject report without crashing the
-        whole batch. A failure is recorded with record_skip (in this process,
-        with the raised exception) in the side's skip list, with the key of
-        the graph file; in BIDS mode the other graph files go on, and a graph
-        file whose key was listed when the run started is left out.
-        """
+    def generate_one_transform(self, subject: str):  # noqa: V105 - used through graph_step.GraphStep
+        """Generates and writes ICBM2009c transform for one subject."""
         list_graph_file, graph_path = self.graph_files(self._subject_folders(subject), f"{self.src_dir}/{subject}*")
         log.debug(graph_path)
         log.debug(f"list_graph_file = {list_graph_file}")
         if not list_graph_file:
-            exc = FileNotFoundError(
-                f"No graph file: {graph_path} doesn't exist")
-            record_skip(self.skip_dir, self.side, _STEP, subject, exc)
-            return (subject, str(exc))
-        first_failure = None
-        for graph_file in list_graph_file:
-            key = session_key(subject, graph_file, self.bids)
-            if self.bids and key in self.skipped_keys:
-                continue
-            try:
-                transform_file = self.get_transform_filename(
-                    subject, graph_file)
-                if not exists(transform_file):
-                    graph = aims.read(graph_file)
-                    g_to_icbm_template = \
-                        aims.GraphManip.getICBM2009cTemplateTransform(graph)
-                    aims.write(g_to_icbm_template, transform_file)
-            except Exception as exc:
-                record_skip(self.skip_dir, self.side, _STEP, key, exc)
-                first_failure = str(exc) if first_failure is None else first_failure
-            if not self.bids:
-                break
-        return (subject, first_failure)
+            return (subject, self.record_missing(subject, f"No graph file: {graph_path} doesn't exist"))
+        return (subject, self.convert_graphs(subject, list_graph_file))
 
     def _subject_folders(self, subject):
         """Returns the src_dir folders of subject, sorted: its own and its session folders."""
@@ -243,24 +136,32 @@ class GraphGenerateTransform(subject_cli.GraphStepInputs):
 
     def get_transform_filename(self, subject, graph_file):
         return get_transform_filename(
-            self.transform_dir, self.side, subject, graph_file, self.bids)
+            self.side_dir, self.side, subject, graph_file, self.bids)
 
-    def compute(self, nb_subjects):
+    get_output_filename = get_transform_filename  # noqa: V107 - used through graph_step.GraphStep
+
+    def convert(self, graph_file, output_file):  # noqa: V105 - used through graph_step.GraphStep
+        graph = aims.read(graph_file)
+        g_to_icbm_template = \
+            aims.GraphManip.getICBM2009cTemplateTransform(graph)
+        aims.write(g_to_icbm_template, output_file)
+
+    def map_parallel(self, one_subject, list_subjects):  # noqa: V105 - used through graph_step.GraphStep
+        return pqdm(list_subjects, one_subject, n_jobs=define_njobs())
+
+    def compute(self, nb_subjects):  # noqa: V105 - used through graph_step.GraphStep
         """Loops over subjects to generate transforms to ICBM2009c from graphs.
         """
-        # Gets list fo subjects
-        filenames = sorted(glob.glob(f"{self.src_dir}/*"))
-        list_subjects = [basename(filename) for filename in filenames
-                         if is_it_a_subject(filename)]
+        list_subjects = self.listed_subjects()
         log.info(f"Number of subjects before qc = {len(list_subjects)}")
         self.prescan_listed(list_subjects)
         list_subjects = select_good_qc(list_subjects, self.qc_path)
         skipped = load_skipped(self.skip_dir, self.side)
-        self.skipped_keys = frozenset(skipped)
+        self.skipped_keys = frozenset(skipped)  # noqa: V101 - used through graph_step.GraphStep
         list_subjects = [s for s in list_subjects if s not in skipped]
         not_processed_subjects = \
             get_not_processed_subjects_transform(list_subjects,
-                                                 self.transform_dir,
+                                                 self.side_dir,
                                                  prefix="ICBM2009c_")
         list_subjects = select_subjects_int(list_subjects,
                                             not_processed_subjects,
@@ -270,38 +171,8 @@ class GraphGenerateTransform(subject_cli.GraphStepInputs):
         log.info(f"list_subjects[:5] = {list_subjects[:5]}")
         log.debug(f"list_subjects = {list_subjects}")
 
-        # Performs computation on all subjects either serially or in parallel
-        if self.parallel:
-            log.info(
-                "PARALLEL MODE: transforms are generated in parallel.")
-            results = pqdm(list_subjects,
-                           self.generate_one_transform,
-                           n_jobs=define_njobs())
-        else:
-            log.info(
-                "SERIAL MODE: transforms are generated serially, "
-                "without parallelism")
-            results = [self.generate_one_transform(sub)
-                       for sub in list_subjects]
-
-        # pqdm returns (does not raise) an exception the worker let through
-        for result in results:
-            if isinstance(result, BaseException):
-                raise result
-
-        # Per-subject report, one INFO record on the module logger
-        failures = {sub: reason for sub, reason in results
-                    if reason is not None}
-        n_ok = len(list_subjects) - len(failures)
-        lines = [
-            f"--- Transform generation summary (side={self.side}) ---",
-            f"  Succeeded: {n_ok}/{len(list_subjects)}",
-        ]
-        if failures:
-            lines.append(f"  Skipped ({len(failures)}):")
-            for sub, reason in sorted(failures.items()):
-                lines.append(f"    {sub}: {reason}")
-        log.info("\n".join(lines))
+        results = self.run_subjects(list_subjects)
+        self.log_summary("Transform generation", results, list_subjects)
 
         # Checks if there is expected number of generated files
         if self.counts_listed_graphs():
@@ -309,41 +180,21 @@ class GraphGenerateTransform(subject_cli.GraphStepInputs):
                            glob.glob(f"{self.src_dir}/*/{self.path_to_graph}")
                            if not re.search('.minf$', g)]
             compare_number_aims_files_with_expected(
-                self.transform_dir, list_graphs)
+                self.side_dir, list_graphs)
         else:
-            compare_number_aims_files_with_expected(self.transform_dir,
+            compare_number_aims_files_with_expected(self.side_dir,
                                                     list_subjects)
 
 
-def generate_ICBM2009c_transforms(
-        src_dir=_SRC_DIR_DEFAULT,
-        transform_dir=_TRANSFORM_DIR_DEFAULT,
-        path_to_graph=None,
-        side=_SIDE_DEFAULT,
-        bids=False,
-        parallel=False,
-        nb_subjects=_ALL_SUBJECTS,
-        qc_path=_QC_PATH_DEFAULT,
-        skip_dir=None, graph_label=None, graphs=None):
+def generate_ICBM2009c_transforms(src_dir=_SRC_DIR_DEFAULT, transform_dir=_TRANSFORM_DIR_DEFAULT, path_to_graph=None,
+                                  side=_SIDE_DEFAULT, bids=False, parallel=False, nb_subjects=_ALL_SUBJECTS,
+                                  qc_path=_QC_PATH_DEFAULT, skip_dir=None, graph_label=None, graphs=None):
     """Generates skeletons from graphs
 
     skip_dir: directory of the per-side skip lists (cortical_tiles skip_list
     module). Default: transform_dir.
     """
-
-    # Initialization
-    transform = GraphGenerateTransform(
-        src_dir=src_dir,
-        transform_dir=transform_dir,
-        path_to_graph=path_to_graph,
-        side=side,
-        bids=bids,
-        parallel=parallel,
-        qc_path=qc_path,
-        skip_dir=skip_dir, graph_label=graph_label, graphs=graphs
-    )
-    # Actual generation of skeletons from graphs
-    transform.compute(nb_subjects=nb_subjects)
+    GraphGenerateTransform.run(locals())
 
 
 @exception_handler
@@ -354,20 +205,7 @@ def main(argv):
     Args:
         argv: a list containing command line arguments
     """
-    # Parsing arguments
-    params = parse_args(argv)
-
-    # Actual API
-    generate_ICBM2009c_transforms(
-        src_dir=params['src_dir'],
-        transform_dir=params['transform_dir'],
-        path_to_graph=params['path_to_graph'], graph_label=params['graph_label'],
-        side=params['side'],
-        bids=params['bids'],
-        parallel=params['parallel'],
-        nb_subjects=params['nb_subjects'],
-        qc_path=params['qc_path'])
-
+    generate_ICBM2009c_transforms(**parse_args(argv))
 
 if __name__ == '__main__':
     # This permits to call main also from another python program

@@ -278,6 +278,15 @@ def absent_masks(masks_dir, vox_size, side, sulci_list):
             if not os.path.exists(os.path.join(masks_dir, path))]
 
 
+def _run_graph_step(step, arguments, output_key, prog_name, full_side, step_graphs):
+    """Writes the step's command line and log files under its output folder, then runs step(**arguments, **step_graphs)."""
+    setup_log(Namespace(**{'verbose': log.level, **arguments}),
+              log_dir=f"{arguments[output_key]}",
+              prog_name=prog_name,
+              suffix=full_side[1:])
+    step(**arguments, **step_graphs)
+
+
 def run_with_params(params: dict):
     """Execute the full pipeline for one region given a resolved params dict.
 
@@ -435,14 +444,7 @@ def run_with_params(params: dict):
                 'njobs': params['njobs'],
                 'skip_dir': params['output_dir']}
 
-            setup_log(
-                Namespace(**{'verbose': log.level,
-                          **args_generate_skeletons}),
-                log_dir=f"{args_generate_skeletons['skeleton_dir']}",
-                prog_name='pipeline_generate_skeletons.py',
-                suffix=full_side[1:])
-
-            generate_skeletons(**args_generate_skeletons, **step_graphs)
+            _run_graph_step(generate_skeletons, args_generate_skeletons, 'skeleton_dir', 'pipeline_generate_skeletons.py', full_side, step_graphs)
             log.info('Skeletons generated')
 
     # generate raw distmaps if required
@@ -508,13 +510,7 @@ def run_with_params(params: dict):
                 'qc_path': params['skel_qc_path'],
                 'skip_dir': params['output_dir']}
 
-            setup_log(Namespace(**{'verbose': log.level,
-                                   **args_generate_foldlabels}),
-                      log_dir=f"{args_generate_foldlabels['foldlabel_dir']}",
-                      prog_name='pipeline_generate_foldlabels.py',
-                      suffix=full_side[1:])
-
-            generate_foldlabels(**args_generate_foldlabels, **step_graphs)
+            _run_graph_step(generate_foldlabels, args_generate_foldlabels, 'foldlabel_dir', 'pipeline_generate_foldlabels.py', full_side, step_graphs)
             log.info('Raw foldlabels generated')
 
     ##########################################################
@@ -547,14 +543,8 @@ def run_with_params(params: dict):
                 'qc_path': params['skel_qc_path'],
                 'skip_dir': params['output_dir']}
 
-            setup_log(
-                Namespace(**{'verbose': log.level,
-                             **args_generate_transforms}),
-                log_dir=f"{args_generate_transforms['transform_dir']}",
-                prog_name='pipeline_generate_ICBM2009c_transforms.py',
-                suffix=full_side[1:])
-
-            generate_ICBM2009c_transforms(**args_generate_transforms, **step_graphs)
+            _run_graph_step(generate_ICBM2009c_transforms, args_generate_transforms, 'transform_dir', 'pipeline_generate_ICBM2009c_transforms.py', full_side,
+                            step_graphs)
             log.info('Transforms generated')
 
     ##########################################################
