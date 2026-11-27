@@ -37,8 +37,12 @@ SKIP_STEPS = (
 SKIP_SIDES = ("L", "R")
 SKIP_LIST_FILENAME = "skip_list_{side}.jsonl"
 # Named set "session parts": the suffix of a BIDS key, in key order
-SESSION_PARTS = ("ses", "acq", "run")
+SESSION_PARTS = ("ses", "acq", "run", "ana")
 
+# ana matches only as an entity: at the start of the path, or right after / or _.
+# ses, acq and run keep their unanchored pattern, so a key without ana is unchanged.
+_ENTITY_BOUNDARY = {"ana": r"(?<![^/_])"}
+_ENTITY_PATTERNS = tuple(re.compile(_ENTITY_BOUNDARY.get(part, "") + rf"{part}-[^_/]+") for part in SESSION_PARTS)
 _TRAILING_SESSION_PARTS = re.compile(rf"(_({'|'.join(SESSION_PARTS)})-[^_/]+)+$")
 _ENTRY_KEYS = frozenset(("subject", "step", "exc_type", "message"))
 
@@ -61,13 +65,17 @@ def session_key(subject, graph_file, bids):
     """
     if not bids:
         return subject
-    matches = (re.search(rf"{part}-[^_/]+", graph_file) for part in SESSION_PARTS)
-    return "_".join([subject, *(match[0] for match in matches if match)])
+    matches = (pattern.search(graph_file) for pattern in _ENTITY_PATTERNS)
+    result = "_".join([subject, *(match[0] for match in matches if match)])
+    assert len(result) >= len(subject), "ScanKey.session_key post: len(result) >= len(subject)"
+    return result
 
 
 def subject_form(key):
     """Returns a subject key without its trailing session parts."""
-    return _TRAILING_SESSION_PARTS.sub("", key)
+    result = _TRAILING_SESSION_PARTS.sub("", key)
+    assert len(result) <= len(key), "ScanKey.subject_form post: len(result) <= len(key)"
+    return result
 
 
 def covered_by(key, names):
