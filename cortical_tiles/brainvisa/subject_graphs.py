@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from functools import wraps
 from typing import NamedTuple
 
+from cortical_tiles.brainvisa.utils.skip_list import subject_form
 from cortical_tiles.config.logs import set_file_logger
 
 __all__ = [
@@ -60,7 +61,7 @@ class SeveralLabellingSetsError(ValueError):
 class GraphSpec:
     """How the graphs of a subject are found.
 
-    graphs: per subject folder name, per side, the .arg files the caller lists.
+    graphs: per subject folder name or scan key, per side, the .arg files the caller lists.
     path_to_graph: the legacy relative path of today's glob.
     label: the labelling set chosen when graph discovery finds several.
     path_filter: graph discovery keeps a candidate only when it returns True for the
@@ -257,10 +258,15 @@ def prescan_labelling_sets(subject_dirs, spec):
         raise SeveralLabellingSetsError(collected)
 
 
+def _keys_of_folder(graphs, folder):
+    """Returns, sorted, the graphs map keys of folder: the folder name or a scan key of that subject."""
+    return sorted(key for key in graphs if key == folder or subject_form(key) == folder)
+
+
 def _resolve_listed(subject_dir, graphs):
-    """Returns per side the .arg files the graphs map lists for subject_dir."""
-    listed = graphs.get(os.path.basename(os.path.normpath(subject_dir)), {})
-    return {side: [os.fspath(path) for path in listed.get(side, [])] for side in SIDES}
+    """Returns per side the .arg files the graphs map lists for subject_dir, entries in sorted key order."""
+    keys = _keys_of_folder(graphs, os.path.basename(os.path.normpath(subject_dir)))
+    return {side: [os.fspath(path) for key in keys for path in graphs[key].get(side, [])] for side in SIDES}
 
 
 def _resolve_glob(subject_dir, path_to_graph):

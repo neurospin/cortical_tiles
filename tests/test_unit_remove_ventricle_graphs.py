@@ -178,7 +178,7 @@ def test_bids_discovery_reads_labelled_graphs_of_the_session_key_in_morphologist
     }
     remover = _remover(tmp_path, morpho, labelling_session=CLI_LABEL, bids=True)
     expected = [graphs["ses-2", "L"][CLI_LABEL], graphs["ses-2", "R"][CLI_LABEL]]
-    assert remover.get_labelled_graph(f"{BIDS_SUBJECT}_ses-2_run-0") == expected
+    assert remover.get_labelled_graph(f"{BIDS_SUBJECT}_ses-2_run-0_ana-0") == expected
 
 
 # --- REQ-ARGDISC-BDRABCZUK-2B5E5A6BA347 and -8D59CA724571: labelled graph only ----------------------------------------
